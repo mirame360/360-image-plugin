@@ -1,0 +1,65 @@
+{
+  "name": "360-image-player",
+  "version": "0.1.0",
+  "description": "Framework-agnostic 360 image player based on Pannellum.",
+  "type": "module",
+  "license": "MIT",
+  "sideEffects": false,
+  "main": "./dist/360-image-player.min.cjs",
+  "module": "./dist/360-image-player.min.js",
+  "browser": "./dist/360-image-player.standalone.umd.min.js",
+  "unpkg": "./dist/360-image-player.standalone.umd.min.js",
+  "jsdelivr": "./dist/360-image-player.standalone.umd.min.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/360-image-player.min.js",
+      "require": "./dist/360-image-player.min.cjs",
+      "default": "./dist/360-image-player.min.js"
+    },
+    "./standalone": {
+      "default": "./dist/360-image-player.standalone.umd.min.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist/**/*.d.ts",
+    "dist/360-image-player.min.cjs",
+    "dist/360-image-player.min.js",
+    "dist/360-image-player.standalone.umd.min.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "vite build --config vite.config.ts && vite build --config vite.standalone.config.ts && tsc -p tsconfig.build.json",
+    "lint": "eslint . --max-warnings 0",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "keywords": [
+    "360-image",
+    "webgl",
+    "panorama",
+    "equirectangular",
+    "pannellum"
+  ],
+  "peerDependencies": {
+    "react": ">=16.8.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^25.6.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "eslint": "^10.2.1",
+    "globals": "^17.5.0",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "typescript": "^5.4.5",
+    "typescript-eslint": "^8.59.0",
+    "vite": "^7.3.2"
+  },
+  "dependencies": {}
+}
