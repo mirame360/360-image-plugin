@@ -50,3 +50,5 @@ export class Image360Player {
     }
   }
 }
+
+export * from './react/ReactImage360Player';

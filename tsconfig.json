@@ -14,7 +14,7 @@
     "baseUrl": ".",
     "jsx": "react-jsx",
     "paths": {
-      "webgl-360-player": ["src/index.ts"]
+      "360-image-player": ["src/index.ts"]
     },
     "resolveJsonModule": true,
     "isolatedModules": true,
