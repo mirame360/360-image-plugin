@@ -35,6 +35,8 @@
   ],
   "scripts": {
     "build": "vite build --config vite.config.ts && vite build --config vite.standalone.config.ts && tsc -p tsconfig.build.json",
+    "demo": "npm run build && vite demo --host 0.0.0.0",
+    "demo:build": "npm run build && vite build demo --outDir dist-demo --emptyOutDir",
     "lint": "eslint . --max-warnings 0",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test:unit": "vitest run --config vitest.config.ts"

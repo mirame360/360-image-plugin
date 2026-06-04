@@ -22,6 +22,9 @@ describe('Image360Player', () => {
       autoLoad: true,
       showControls: true,
       compass: false,
+      mouseZoom: true,
+      doubleClickZoom: true,
+      draggable: true,
     });
   });
 
@@ -32,6 +35,9 @@ describe('Image360Player', () => {
       autoLoad: false,
       showControls: false,
       compass: true,
+      mouseZoom: false,
+      doubleClickZoom: false,
+      touchPanAndZoom: false,
     });
 
     expect((window as any).pannellum.viewer).toHaveBeenCalledWith(container, {
@@ -40,6 +46,9 @@ describe('Image360Player', () => {
       autoLoad: false,
       showControls: false,
       compass: true,
+      mouseZoom: false,
+      doubleClickZoom: false,
+      draggable: false,
     });
   });
 

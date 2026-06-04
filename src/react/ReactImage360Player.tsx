@@ -7,7 +7,7 @@ export interface ReactImage360PlayerProps extends Omit<Image360PlayerOptions, 'c
 }
 
 export const ReactImage360Player = forwardRef<Image360Player | null, ReactImage360PlayerProps>(
-  ({ className, style, imageUrl, autoLoad, showControls, compass }, ref) => {
+  ({ className, style, imageUrl, autoLoad, showControls, compass, mouseZoom, doubleClickZoom, touchPanAndZoom }, ref) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const playerRef = useRef<Image360Player | null>(null);
 
@@ -22,6 +22,9 @@ export const ReactImage360Player = forwardRef<Image360Player | null, ReactImage3
         autoLoad,
         showControls,
         compass,
+        mouseZoom,
+        doubleClickZoom,
+        touchPanAndZoom,
       });
 
       playerRef.current = player;
@@ -30,7 +33,7 @@ export const ReactImage360Player = forwardRef<Image360Player | null, ReactImage3
         player.destroy();
         playerRef.current = null;
       };
-    }, [imageUrl, autoLoad, showControls, compass]);
+    }, [imageUrl, autoLoad, showControls, compass, mouseZoom, doubleClickZoom, touchPanAndZoom]);
 
     return (
       <div 
