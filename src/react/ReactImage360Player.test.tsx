@@ -39,4 +39,23 @@ describe('ReactImage360Player', () => {
     const mockViewer = (window as any).pannellum.viewer.mock.results[0].value;
     expect(mockViewer.destroy).toHaveBeenCalled();
   });
+
+  it('updates color filters without destroying the player', () => {
+    const ref = React.createRef<any>();
+    const { rerender } = render(
+      <ReactImage360Player ref={ref} imageUrl="test.jpg" colorFilters={{ exposure: 0 }} />
+    );
+
+    const playerInstance = ref.current;
+    expect(playerInstance).toBeDefined();
+
+    const setColorFiltersSpy = vi.spyOn(playerInstance, 'setColorFilters');
+
+    rerender(
+      <ReactImage360Player ref={ref} imageUrl="test.jpg" colorFilters={{ exposure: 0.5 }} />
+    );
+
+    expect(setColorFiltersSpy).toHaveBeenCalledWith({ exposure: 0.5 });
+    expect((window as any).pannellum.viewer).toHaveBeenCalledTimes(1);
+  });
 });

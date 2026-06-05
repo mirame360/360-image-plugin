@@ -44,4 +44,54 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
   }
+
+  // Connect sliders to color filters
+  const filtersList = [
+    { id: 'exposure', default: 0 },
+    { id: 'brightness', default: 0 },
+    { id: 'contrast', default: 1 },
+    { id: 'saturation', default: 1 },
+    { id: 'temperature', default: 0 },
+    { id: 'tint', default: 0 },
+    { id: 'highlight', default: 0 },
+    { id: 'shadow', default: 0 },
+  ];
+
+  function updateFilter(id: string, value: number) {
+    const labelVal = document.getElementById(`val-${id}`);
+    if (labelVal) {
+      labelVal.textContent = value.toFixed(2);
+    }
+    player.setColorFilters({
+      [id]: value
+    });
+  }
+
+  filtersList.forEach(item => {
+    const input = document.getElementById(`filter-${item.id}`) as HTMLInputElement;
+    if (input) {
+      const labelVal = document.getElementById(`val-${item.id}`);
+      if (labelVal) {
+        labelVal.textContent = parseFloat(input.value).toFixed(2);
+      }
+
+      input.addEventListener('input', (e) => {
+        const val = parseFloat((e.target as HTMLInputElement).value);
+        updateFilter(item.id, val);
+      });
+    }
+  });
+
+  const resetBtn = document.getElementById('btn-reset');
+  if (resetBtn) {
+    resetBtn.addEventListener('click', () => {
+      filtersList.forEach(item => {
+        const input = document.getElementById(`filter-${item.id}`) as HTMLInputElement;
+        if (input) {
+          input.value = item.default.toString();
+          updateFilter(item.id, item.default);
+        }
+      });
+    });
+  }
 });

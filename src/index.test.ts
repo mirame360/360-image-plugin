@@ -98,4 +98,42 @@ describe('Image360Player', () => {
       draggable: true,
     });
   });
+
+  it('should initialize and update color filters correctly', () => {
+    const player = new Image360Player({
+      container,
+      imageUrl: 'test.jpg',
+      colorFilters: {
+        exposure: 0.5,
+        brightness: 0.1,
+      }
+    });
+
+    expect(player.getColorFilters()).toEqual({
+      exposure: 0.5,
+      brightness: 0.1,
+      contrast: 1,
+      saturation: 1,
+      temperature: 0,
+      tint: 0,
+      highlight: 0,
+      shadow: 0,
+    });
+
+    player.setColorFilters({
+      exposure: -0.2,
+      contrast: 1.2,
+    });
+
+    expect(player.getColorFilters()).toEqual({
+      exposure: -0.2,
+      brightness: 0.1,
+      contrast: 1.2,
+      saturation: 1,
+      temperature: 0,
+      tint: 0,
+      highlight: 0,
+      shadow: 0,
+    });
+  });
 });

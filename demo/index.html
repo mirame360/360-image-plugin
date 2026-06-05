@@ -16,6 +16,7 @@
         display: flex;
         flex-direction: column;
         height: 100vh;
+        position: relative;
       }
       .header {
         padding: 1rem 2rem;
@@ -95,6 +96,85 @@
         font-size: 12px;
         text-align: center;
       }
+      .filters-panel {
+        position: absolute;
+        top: 80px;
+        right: 20px;
+        width: 280px;
+        background: rgba(15, 23, 42, 0.85);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 12px;
+        padding: 1.25rem;
+        box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+        z-index: 10;
+        display: flex;
+        flex-direction: column;
+        gap: 0.85rem;
+        user-select: none;
+      }
+      .panel-title {
+        font-size: 0.95rem;
+        font-weight: 700;
+        margin: 0;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        padding-bottom: 0.5rem;
+      }
+      .panel-title button.reset-btn {
+        background: transparent;
+        color: #3b82f6;
+        border: none;
+        padding: 0;
+        font-size: 0.8rem;
+        cursor: pointer;
+        font-weight: 600;
+        transition: color 0.2s;
+      }
+      .panel-title button.reset-btn:hover {
+        color: #60a5fa;
+        background: transparent;
+      }
+      .filter-group {
+        display: flex;
+        flex-direction: column;
+        gap: 0.3rem;
+      }
+      .filter-label {
+        font-size: 0.78rem;
+        font-weight: 600;
+        color: rgba(255, 255, 255, 0.7);
+        display: flex;
+        justify-content: space-between;
+      }
+      .filter-value {
+        color: #3b82f6;
+        font-family: monospace;
+      }
+      input[type="range"] {
+        -webkit-appearance: none;
+        width: 100%;
+        height: 4px;
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 2px;
+        outline: none;
+      }
+      input[type="range"]::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background: #3b82f6;
+        cursor: pointer;
+        transition: transform 0.1s;
+      }
+      input[type="range"]::-webkit-slider-thumb:hover {
+        transform: scale(1.2);
+      }
     </style>
   </head>
   <body>
@@ -111,6 +191,77 @@
     </div>
     
     <div id="viewer"></div>
+
+    <div class="filters-panel">
+      <div class="panel-title">
+        <span>Color Adjustments</span>
+        <button id="btn-reset" class="reset-btn">Reset All</button>
+      </div>
+      
+      <div class="filter-group">
+        <div class="filter-label">
+          <span>Exposure</span>
+          <span id="val-exposure" class="filter-value">0.00</span>
+        </div>
+        <input type="range" id="filter-exposure" min="-2" max="2" step="0.05" value="0" />
+      </div>
+
+      <div class="filter-group">
+        <div class="filter-label">
+          <span>Brightness</span>
+          <span id="val-brightness" class="filter-value">0.00</span>
+        </div>
+        <input type="range" id="filter-brightness" min="-1" max="1" step="0.05" value="0" />
+      </div>
+
+      <div class="filter-group">
+        <div class="filter-label">
+          <span>Contrast</span>
+          <span id="val-contrast" class="filter-value">1.00</span>
+        </div>
+        <input type="range" id="filter-contrast" min="0" max="3" step="0.05" value="1" />
+      </div>
+
+      <div class="filter-group">
+        <div class="filter-label">
+          <span>Saturation</span>
+          <span id="val-saturation" class="filter-value">1.00</span>
+        </div>
+        <input type="range" id="filter-saturation" min="0" max="3" step="0.05" value="1" />
+      </div>
+
+      <div class="filter-group">
+        <div class="filter-label">
+          <span>Temperature</span>
+          <span id="val-temperature" class="filter-value">0.00</span>
+        </div>
+        <input type="range" id="filter-temperature" min="-1" max="1" step="0.05" value="0" />
+      </div>
+
+      <div class="filter-group">
+        <div class="filter-label">
+          <span>Tint</span>
+          <span id="val-tint" class="filter-value">0.00</span>
+        </div>
+        <input type="range" id="filter-tint" min="-1" max="1" step="0.05" value="0" />
+      </div>
+
+      <div class="filter-group">
+        <div class="filter-label">
+          <span>Highlights</span>
+          <span id="val-highlight" class="filter-value">0.00</span>
+        </div>
+        <input type="range" id="filter-highlight" min="-1" max="1" step="0.05" value="0" />
+      </div>
+
+      <div class="filter-group">
+        <div class="filter-label">
+          <span>Shadows</span>
+          <span id="val-shadow" class="filter-value">0.00</span>
+        </div>
+        <input type="range" id="filter-shadow" min="-1" max="1" step="0.05" value="0" />
+      </div>
+    </div>
 
     <div id="snapshot-result">
       <img id="snapshot-img" src="" alt="Snapshot" />
