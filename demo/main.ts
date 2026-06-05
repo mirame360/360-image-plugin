@@ -27,4 +27,21 @@ document.addEventListener('DOMContentLoaded', () => {
       alert(`Snapshot requested!\nYaw: ${yaw.toFixed(2)}\nPitch: ${pitch.toFixed(2)}\nHFOV: ${hfov.toFixed(2)}\n\n(This would trigger the FFmpeg backend extraction)`);
     });
   }
+
+  let currentObjectUrl: string | null = null;
+  const fileUpload = document.getElementById('file-upload') as HTMLInputElement;
+  if (fileUpload) {
+    fileUpload.addEventListener('change', (event) => {
+      const target = event.target as HTMLInputElement;
+      const files = target.files;
+      if (files && files.length > 0) {
+        const file = files[0];
+        if (currentObjectUrl) {
+          URL.revokeObjectURL(currentObjectUrl);
+        }
+        currentObjectUrl = URL.createObjectURL(file);
+        player.setImageUrl(currentObjectUrl);
+      }
+    });
+  }
 });

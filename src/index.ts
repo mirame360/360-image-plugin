@@ -20,8 +20,10 @@ export interface HotSpotOptions {
 export class Image360Player {
   private viewer: any;
   private container: HTMLElement;
+  private options: Image360PlayerOptions;
 
   constructor(options: Image360PlayerOptions) {
+    this.options = options;
     this.container = options.container;
 
     if (!this.checkWebGLSupport()) {
@@ -41,6 +43,38 @@ export class Image360Player {
         // Pinch-to-zoom and touch panning are enabled by default in Pannellum,
         // but we can ensure multi-res and smooth touch are handled well.
         draggable: options.touchPanAndZoom ?? true,
+      });
+    } else {
+      console.error('Pannellum is not loaded.');
+    }
+  }
+
+  /**
+   * Updates the 360 image URL and reinitializes the viewer.
+   */
+  public setImageUrl(url: string): void {
+    this.options.imageUrl = url;
+    if (!this.checkWebGLSupport()) {
+      this.renderFallback();
+      return;
+    }
+
+    if (this.viewer) {
+      this.viewer.destroy();
+      this.viewer = null;
+    }
+    this.container.innerHTML = '';
+
+    if (typeof (window as any).pannellum !== 'undefined') {
+      this.viewer = (window as any).pannellum.viewer(this.container, {
+        type: 'equirectangular',
+        panorama: url,
+        autoLoad: this.options.autoLoad ?? true,
+        showControls: this.options.showControls ?? true,
+        compass: this.options.compass ?? false,
+        mouseZoom: this.options.mouseZoom ?? true,
+        doubleClickZoom: this.options.doubleClickZoom ?? true,
+        draggable: this.options.touchPanAndZoom ?? true,
       });
     } else {
       console.error('Pannellum is not loaded.');

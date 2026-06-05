@@ -75,4 +75,27 @@ describe('Image360Player', () => {
     const mockViewer = (window as any).pannellum.viewer.mock.results[0].value;
     expect(mockViewer.destroy).toHaveBeenCalled();
   });
+
+  it('should update the image URL and recreate the viewer when setImageUrl is called', () => {
+    const player = new Image360Player({
+      container,
+      imageUrl: 'test1.jpg'
+    });
+
+    const mockViewer = (window as any).pannellum.viewer.mock.results[0].value;
+
+    player.setImageUrl('test2.jpg');
+
+    expect(mockViewer.destroy).toHaveBeenCalled();
+    expect((window as any).pannellum.viewer).toHaveBeenLastCalledWith(container, {
+      type: 'equirectangular',
+      panorama: 'test2.jpg',
+      autoLoad: true,
+      showControls: true,
+      compass: false,
+      mouseZoom: true,
+      doubleClickZoom: true,
+      draggable: true,
+    });
+  });
 });
