@@ -175,12 +175,27 @@ export class Image360Player {
   private setupWebGLInterceptors(gl: WebGLRenderingContext): void {
     this.gl = gl;
     const self = this;
+    const shaderTypes = new Map<WebGLShader, number>();
+
+    // Intercept createShader to remember the type of each shader
+    const originalCreateShader = gl.createShader;
+    if (originalCreateShader) {
+      gl.createShader = function (type: number) {
+        const shader = originalCreateShader.call(this, type);
+        if (shader) {
+          shaderTypes.set(shader, type);
+        }
+        return shader;
+      };
+    }
     
     // Intercept shaderSource to inject our filter code into the fragment shader
     const originalShaderSource = gl.shaderSource;
     if (originalShaderSource) {
       gl.shaderSource = function (shader, source) {
-        const isFragmentShader = gl.getShaderParameter(shader, gl.SHADER_TYPE) === gl.FRAGMENT_SHADER;
+        const type = shaderTypes.get(shader);
+        const isFragmentShader = type === gl.FRAGMENT_SHADER;
+        
         if (isFragmentShader && (source.indexOf('texture2d') !== -1 || source.indexOf('texture2D') !== -1 || source.indexOf('textureCube') !== -1)) {
           const filterDef = `
             uniform float uExposure;
@@ -224,10 +239,21 @@ export class Image360Player {
             }
           `;
           
+          // 1. Declare custom_FragColor at the start of main()
+          source = source.replace(/void\s+main\s*\(\s*(?:void)?\s*\)\s*\{/g, 
+            'void main() {\nvec4 custom_FragColor = vec4(0.0);');
+
+          // 2. Replace all other occurrences of gl_FragColor with custom_FragColor
+          source = source.replace(/gl_FragColor/g, 'custom_FragColor');
+
+          // 3. Prepend our filter uniforms and helper function
+          source = filterDef + source;
+          
+          // 4. Find the last closing brace and output gl_FragColor with filters applied
           let lastBrace = source.lastIndexOf('}');
           if (lastBrace !== -1) {
-            source = filterDef + source.substring(0, lastBrace) + `
-              gl_FragColor.rgb = applyFilters(gl_FragColor.rgb);
+            source = source.substring(0, lastBrace) + `
+              gl_FragColor = vec4(applyFilters(custom_FragColor.rgb), custom_FragColor.a);
             }` + source.substring(lastBrace + 1);
           }
         }
