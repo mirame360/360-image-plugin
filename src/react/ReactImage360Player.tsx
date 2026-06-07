@@ -50,7 +50,6 @@ export const ReactImage360Player = forwardRef<Image360Player | null, ReactImage3
         mouseZoom,
         doubleClickZoom,
         touchPanAndZoom,
-        colorFilters,
       });
 
       setPlayer(newPlayer);
@@ -73,7 +72,13 @@ export const ReactImage360Player = forwardRef<Image360Player | null, ReactImage3
           }
         }
       };
-    }, [imageUrl, autoLoad, showControls, compass, mouseZoom, doubleClickZoom, touchPanAndZoom]);
+    }, [autoLoad, showControls, compass, mouseZoom, doubleClickZoom, touchPanAndZoom]);
+
+    useEffect(() => {
+      if (player && imageUrl) {
+        player.setImageUrl(imageUrl);
+      }
+    }, [player, imageUrl]);
 
     useEffect(() => {
       if (player && colorFilters) {

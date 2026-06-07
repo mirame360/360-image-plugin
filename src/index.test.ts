@@ -257,6 +257,137 @@ describe('Image360Player', () => {
     );
   });
 
+  it('should render fallback message if WebGL is not supported', () => {
+    const originalWebGL = window.WebGLRenderingContext;
+    delete (window as any).WebGLRenderingContext;
+
+    const fallbackContainer = document.createElement('div');
+    document.body.appendChild(fallbackContainer);
+
+    const player = new Image360Player({
+      container: fallbackContainer,
+      imageUrl: 'test.jpg'
+    });
+
+    expect(fallbackContainer.textContent).toContain('WebGL Not Supported');
+
+    fallbackContainer.remove();
+    (window as any).WebGLRenderingContext = originalWebGL;
+  });
+
+  it('should toggle HFOV on double click', () => {
+    const player = new Image360Player({
+      container,
+      imageUrl: 'test.jpg'
+    });
+
+    expect(player.getHfov()).toBe(90);
+
+    const canvas = container.querySelector('canvas')!;
+    canvas.dispatchEvent(new MouseEvent('dblclick'));
+
+    expect(player.getHfov()).toBe(40);
+
+    canvas.dispatchEvent(new MouseEvent('dblclick'));
+    expect(player.getHfov()).toBe(90);
+  });
+
+  it('should open URL when default styled hyperlink hotspot is clicked', () => {
+    const player = new Image360Player({
+      container,
+      imageUrl: 'test.jpg'
+    });
+
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+
+    player.addHTMLOverlay({
+      id: 'hotspot-link',
+      yaw: 45,
+      pitch: 0,
+      text: 'Link',
+      url: 'https://example.com',
+      target: '_blank'
+    });
+
+    const marker = container.querySelector('.custom-html-hotspot')!;
+    expect(marker).toBeInTheDocument();
+
+    marker.dispatchEvent(new MouseEvent('click'));
+
+    expect(openSpy).toHaveBeenCalledWith('https://example.com', '_blank');
+    openSpy.mockRestore();
+  });
+
+  it('should update ShaderMaterial uniforms when setColorFilters is called', () => {
+    const player = new Image360Player({
+      container,
+      imageUrl: 'test.jpg'
+    });
+
+    player.setColorFilters({
+      exposure: 1.5,
+      brightness: -0.5,
+    });
+
+    const uniforms = (player as any).material.uniforms;
+    expect(uniforms.uExposure.value).toBe(1.5);
+    expect(uniforms.uBrightness.value).toBe(-0.5);
+  });
+
+  it('should request and end WebXR session when VR button is toggled', async () => {
+    vi.mocked(navigator.xr!.isSessionSupported).mockResolvedValue(true);
+
+    const mockSession = {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      end: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.mocked(navigator.xr!.requestSession).mockResolvedValue(mockSession as any);
+
+    const player = new Image360Player({
+      container,
+      imageUrl: 'test.jpg'
+    });
+
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const vrButton = container.querySelector('.webxr-vr-button') as HTMLButtonElement;
+    expect(vrButton).toBeInTheDocument();
+
+    vrButton.click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(navigator.xr!.requestSession).toHaveBeenCalledWith('immersive-vr');
+    expect(vrButton.querySelector('span')?.textContent).toBe('Exit VR');
+
+    vrButton.click();
+    expect(mockSession.end).toHaveBeenCalled();
+
+    const onEndCallback = mockSession.addEventListener.mock.calls.find((call: any) => call[0] === 'end')?.[1];
+    expect(onEndCallback).toBeDefined();
+    onEndCallback();
+
+    expect(vrButton.querySelector('span')?.textContent).toBe('Enter VR');
+
+    vi.mocked(navigator.xr!.isSessionSupported).mockResolvedValue(false);
+  });
+
+  it('should resolve takeSnapshot with a Blob', async () => {
+    const player = new Image360Player({
+      container,
+      imageUrl: 'test.jpg'
+    });
+
+    const canvas = container.querySelector('canvas')!;
+    const mockBlob = new Blob([''], { type: 'image/png' });
+    canvas.toBlob = vi.fn().mockImplementation((callback) => {
+      callback(mockBlob);
+    });
+
+    const blob = await player.takeSnapshot();
+    expect(blob).toBe(mockBlob);
+  });
+
   it('should clean up and dispose Three.js objects on destroy', () => {
     const player = new Image360Player({
       container,

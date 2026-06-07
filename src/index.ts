@@ -689,6 +689,7 @@ export class Image360Player {
   // --- Public API ---
 
   public setImageUrl(url: string): void {
+    if (this.options.imageUrl === url) return;
     this.options.imageUrl = url;
     this.loadTexture(url);
   }

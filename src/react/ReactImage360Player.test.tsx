@@ -144,4 +144,20 @@ describe('ReactImage360Player', () => {
     viewchangeCallback({ yaw: 15, pitch: -5, hfov: 90 });
     expect(onViewChangeMock).toHaveBeenCalledWith({ yaw: 15, pitch: -5, hfov: 90 });
   });
+
+  it('updates imageUrl without recreating the player', () => {
+    const { rerender } = render(
+      <ReactImage360Player imageUrl="test1.jpg" />
+    );
+
+    const mockPlayerInstance = vi.mocked(Image360Player).mock.results[0].value;
+    expect(Image360Player).toHaveBeenCalledTimes(1);
+
+    // Update imageUrl prop
+    rerender(<ReactImage360Player imageUrl="test2.jpg" />);
+
+    expect(mockPlayerInstance.setImageUrl).toHaveBeenCalledWith('test2.jpg');
+    // Verify constructor wasn't called again
+    expect(Image360Player).toHaveBeenCalledTimes(1);
+  });
 });
