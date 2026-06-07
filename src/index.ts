@@ -731,7 +731,7 @@ export class Image360Player {
     } else {
       // Default premium hotspot style (info marker with dynamic tooltip)
       element.innerHTML = `
-        <div class="default-hotspot-marker" style="width: 28px; height: 28px; border-radius: 50%; background: rgba(255, 255, 255, 0.25); backdrop-filter: blur(8px); border: 2px solid rgba(255, 255, 255, 0.85); box-shadow: 0 4px 12px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-family: system-ui, sans-serif; font-size: 14px; user-select: none; transition: transform 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);">
+        <div class="default-hotspot-marker" style="width: 28px; height: 28px; border-radius: 50%; background: rgba(255, 255, 255, 0.25); backdrop-filter: blur(8px); border: 2px solid rgba(255, 255, 255, 0.85); box-shadow: 0 4px 12px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-family: system-ui, sans-serif; font-size: 14px; user-select: none; transition: transform 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275); box-sizing: border-box; line-height: 1;">
           i
         </div>
         ${options.text ? `
