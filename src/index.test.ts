@@ -309,7 +309,7 @@ describe('Image360Player', () => {
       target: '_blank'
     });
 
-    const marker = container.querySelector('.custom-html-hotspot')!;
+    const marker = container.querySelector('.default-hotspot-container')!;
     expect(marker).toBeInTheDocument();
 
     marker.dispatchEvent(new MouseEvent('click'));

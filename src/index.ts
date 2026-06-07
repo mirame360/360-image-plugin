@@ -717,7 +717,11 @@ export class Image360Player {
     const id = options.id || `hotspot-${Math.random().toString(36).substr(2, 9)}`;
     
     const element = document.createElement('div');
-    element.className = 'custom-html-hotspot';
+    if (options.html) {
+      element.className = 'custom-html-hotspot';
+    } else {
+      element.className = 'default-hotspot-container';
+    }
     if (options.cssClass) {
       element.className += ` ${options.cssClass}`;
     }
