@@ -40,7 +40,7 @@ interface ActiveHotSpot {
   element: HTMLDivElement;
 }
 
-export type PlayerEvent = 'load' | 'viewchange' | 'zoom' | 'error' | 'click';
+export type PlayerEvent = 'load' | 'viewchange' | 'zoom' | 'error' | 'click' | 'hotspotclick';
 
 export interface PlayerEventMap {
   'load': undefined;
@@ -48,6 +48,7 @@ export interface PlayerEventMap {
   'zoom': { hfov: number };
   'error': Error;
   'click': { yaw: number; pitch: number; event: PointerEvent };
+  'hotspotclick': HotSpotOptions;
 }
 
 export class Image360Player {
@@ -775,6 +776,11 @@ export class Image360Player {
         window.open(options.url, options.target || '_blank');
       });
     }
+
+    // Emit global hotspotclick event when clicked
+    element.addEventListener('click', () => {
+      this.emit('hotspotclick', { ...options, id });
+    });
     
     // Stop propagation of pointer events to prevent panning when dragging/clicking on hotspots
     element.addEventListener('pointerdown', (e) => e.stopPropagation());

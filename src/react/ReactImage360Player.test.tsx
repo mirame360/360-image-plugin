@@ -111,6 +111,7 @@ describe('ReactImage360Player', () => {
     const onZoomMock = vi.fn();
     const onErrorMock = vi.fn();
     const onClickMock = vi.fn();
+    const onHotspotClickMock = vi.fn();
 
     render(
       <ReactImage360Player
@@ -120,6 +121,7 @@ describe('ReactImage360Player', () => {
         onZoom={onZoomMock}
         onError={onErrorMock}
         onClick={onClickMock}
+        onHotspotClick={onHotspotClickMock}
       />
     );
 
@@ -129,6 +131,7 @@ describe('ReactImage360Player', () => {
     expect(mockPlayerInstance.on).toHaveBeenCalledWith('zoom', expect.any(Function));
     expect(mockPlayerInstance.on).toHaveBeenCalledWith('error', expect.any(Function));
     expect(mockPlayerInstance.on).toHaveBeenCalledWith('click', expect.any(Function));
+    expect(mockPlayerInstance.on).toHaveBeenCalledWith('hotspotclick', expect.any(Function));
 
     // Retrieve and trigger load callback
     const loadCall = vi.mocked(mockPlayerInstance.on).mock.calls.find((call: any) => call[0] === 'load');
@@ -143,6 +146,14 @@ describe('ReactImage360Player', () => {
     const viewchangeCallback = viewchangeCall![1];
     viewchangeCallback({ yaw: 15, pitch: -5, hfov: 90 });
     expect(onViewChangeMock).toHaveBeenCalledWith({ yaw: 15, pitch: -5, hfov: 90 });
+
+    // Retrieve and trigger hotspotclick callback
+    const hotspotclickCall = vi.mocked(mockPlayerInstance.on).mock.calls.find((call: any) => call[0] === 'hotspotclick');
+    expect(hotspotclickCall).toBeDefined();
+    const hotspotclickCallback = hotspotclickCall![1];
+    const dummyHotspot = { id: 'hs-test', yaw: 45, pitch: 10 };
+    hotspotclickCallback(dummyHotspot);
+    expect(onHotspotClickMock).toHaveBeenCalledWith(dummyHotspot);
   });
 
   it('updates imageUrl without recreating the player', () => {

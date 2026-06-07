@@ -318,6 +318,36 @@ describe('Image360Player', () => {
     openSpy.mockRestore();
   });
 
+  it('should emit hotspotclick event when a hotspot is clicked', () => {
+    const player = new Image360Player({
+      container,
+      imageUrl: 'test.jpg'
+    });
+
+    const clickSpy = vi.fn();
+    player.on('hotspotclick', clickSpy);
+
+    player.addHTMLOverlay({
+      id: 'test-hotspot-event',
+      yaw: 45,
+      pitch: 0,
+      text: 'Click tracking',
+      url: 'https://example.com'
+    });
+
+    const marker = container.querySelector('.default-hotspot-container')!;
+    marker.dispatchEvent(new MouseEvent('click'));
+
+    expect(clickSpy).toHaveBeenCalledTimes(1);
+    expect(clickSpy).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'test-hotspot-event',
+      yaw: 45,
+      pitch: 0,
+      text: 'Click tracking',
+      url: 'https://example.com'
+    }));
+  });
+
   it('should update ShaderMaterial uniforms when setColorFilters is called', () => {
     const player = new Image360Player({
       container,

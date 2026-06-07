@@ -10,6 +10,7 @@ export interface ReactImage360PlayerProps extends Omit<Image360PlayerOptions, 'c
   onZoom?: (data: { hfov: number }) => void;
   onError?: (error: Error) => void;
   onClick?: (data: { yaw: number; pitch: number; event: PointerEvent }) => void;
+  onHotspotClick?: (data: HotSpotOptions) => void;
 }
 
 export const ReactImage360Player = forwardRef<Image360Player | null, ReactImage360PlayerProps>(
@@ -31,6 +32,7 @@ export const ReactImage360Player = forwardRef<Image360Player | null, ReactImage3
       onZoom,
       onError,
       onClick,
+      onHotspotClick,
     },
     ref
   ) => {
@@ -114,12 +116,14 @@ export const ReactImage360Player = forwardRef<Image360Player | null, ReactImage3
       const handleZoom = (data: any) => onZoom?.(data);
       const handleError = (err: any) => onError?.(err);
       const handleClick = (data: any) => onClick?.(data);
+      const handleHotspotClick = (data: any) => onHotspotClick?.(data);
 
       player.on('load', handleLoad);
       player.on('viewchange', handleViewChange);
       player.on('zoom', handleZoom);
       player.on('error', handleError);
       player.on('click', handleClick);
+      player.on('hotspotclick', handleHotspotClick);
 
       return () => {
         player.off('load', handleLoad);
@@ -127,8 +131,9 @@ export const ReactImage360Player = forwardRef<Image360Player | null, ReactImage3
         player.off('zoom', handleZoom);
         player.off('error', handleError);
         player.off('click', handleClick);
+        player.off('hotspotclick', handleHotspotClick);
       };
-    }, [player, onLoad, onViewChange, onZoom, onError, onClick]);
+    }, [player, onLoad, onViewChange, onZoom, onError, onClick, onHotspotClick]);
 
     return (
       <div

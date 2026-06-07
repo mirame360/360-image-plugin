@@ -62,6 +62,10 @@ document.addEventListener('DOMContentLoaded', () => {
     logToConsole('click', `Viewer clicked at Yaw: ${data.yaw.toFixed(2)}° | Pitch: ${data.pitch.toFixed(2)}°`);
   });
 
+  player.on('hotspotclick', (data) => {
+    logToConsole('hotspotclick', `Hotspot clicked: ${data.id} (Yaw: ${data.yaw}°, Pitch: ${data.pitch}°${data.text ? `, text: "${data.text}"` : ''}${data.url ? `, url: "${data.url}"` : ''})`);
+  });
+
   // --- Add Custom and Default Hotspots ---
   
   // 1. Custom HTML hotspot
