@@ -21,7 +21,7 @@ export default defineConfig({
     minify: 'esbuild',
     sourcemap: false,
     rollupOptions: {
-      external: ['react', 'react-dom'],
+      external: ['three', 'react', 'react-dom'],
     },
   },
 });

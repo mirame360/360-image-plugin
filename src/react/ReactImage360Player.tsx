@@ -1,20 +1,22 @@
-import React, { useEffect, useRef, forwardRef } from 'react';
-import { Image360Player, Image360PlayerOptions } from '../index';
+import React, { useEffect, useRef, useState, forwardRef } from 'react';
+import { Image360Player, Image360PlayerOptions, HotSpotOptions } from '../index';
 
 export interface ReactImage360PlayerProps extends Omit<Image360PlayerOptions, 'container'> {
   className?: string;
   style?: React.CSSProperties;
+  hotspots?: HotSpotOptions[];
 }
 
 export const ReactImage360Player = forwardRef<Image360Player | null, ReactImage360PlayerProps>(
-  ({ className, style, imageUrl, autoLoad, showControls, compass, mouseZoom, doubleClickZoom, touchPanAndZoom, colorFilters }, ref) => {
+  ({ className, style, imageUrl, autoLoad, showControls, compass, mouseZoom, doubleClickZoom, touchPanAndZoom, colorFilters, hotspots }, ref) => {
     const containerRef = useRef<HTMLDivElement>(null);
-    const playerRef = useRef<Image360Player | null>(null);
+    const [player, setPlayer] = useState<Image360Player | null>(null);
+    const activeHotspotIdsRef = useRef<string[]>([]);
 
     useEffect(() => {
       if (!containerRef.current) return;
 
-      const player = new Image360Player({
+      const newPlayer = new Image360Player({
         container: containerRef.current,
         imageUrl,
         autoLoad,
@@ -26,18 +28,18 @@ export const ReactImage360Player = forwardRef<Image360Player | null, ReactImage3
         colorFilters,
       });
 
-      playerRef.current = player;
+      setPlayer(newPlayer);
       if (ref) {
         if (typeof ref === 'function') {
-          ref(player);
+          ref(newPlayer);
         } else {
-          (ref as React.MutableRefObject<Image360Player | null>).current = player;
+          (ref as React.MutableRefObject<Image360Player | null>).current = newPlayer;
         }
       }
 
       return () => {
-        player.destroy();
-        playerRef.current = null;
+        newPlayer.destroy();
+        setPlayer(null);
         if (ref) {
           if (typeof ref === 'function') {
             ref(null);
@@ -49,10 +51,29 @@ export const ReactImage360Player = forwardRef<Image360Player | null, ReactImage3
     }, [imageUrl, autoLoad, showControls, compass, mouseZoom, doubleClickZoom, touchPanAndZoom]);
 
     useEffect(() => {
-      if (playerRef.current && colorFilters) {
-        playerRef.current.setColorFilters(colorFilters);
+      if (player && colorFilters) {
+        player.setColorFilters(colorFilters);
       }
-    }, [colorFilters]);
+    }, [player, colorFilters]);
+
+    useEffect(() => {
+      if (!player) return;
+
+      // Clean up previous hotspots
+      activeHotspotIdsRef.current.forEach(id => {
+        player.removeHTMLOverlay(id);
+      });
+      activeHotspotIdsRef.current = [];
+
+      // Render new hotspots
+      if (hotspots) {
+        hotspots.forEach(hs => {
+          const id = hs.id || `react-hotspot-${Math.random().toString(36).substr(2, 9)}`;
+          player.addHTMLOverlay({ ...hs, id });
+          activeHotspotIdsRef.current.push(id);
+        });
+      }
+    }, [player, hotspots]);
 
     return (
       <div 

@@ -1,7 +1,28 @@
 import React from 'react';
-import { render, screen, cleanup } from '@testing-library/react';
+import { render, cleanup } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { ReactImage360Player } from './ReactImage360Player';
+import { Image360Player } from '../index';
+
+// Mock the Image360Player class to test the React wrapper in isolation
+vi.mock('../index', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../index')>();
+  const MockImage360Player = vi.fn().mockImplementation(function (this: any) {
+    this.destroy = vi.fn();
+    this.setColorFilters = vi.fn();
+    this.setImageUrl = vi.fn();
+    this.addHTMLOverlay = vi.fn();
+    this.removeHTMLOverlay = vi.fn();
+    this.getYaw = vi.fn().mockReturnValue(0);
+    this.getPitch = vi.fn().mockReturnValue(0);
+    this.getHfov = vi.fn().mockReturnValue(90);
+    return this;
+  });
+  return {
+    ...original,
+    Image360Player: MockImage360Player,
+  };
+});
 
 describe('ReactImage360Player', () => {
   beforeEach(() => {
@@ -20,27 +41,27 @@ describe('ReactImage360Player', () => {
     expect(container.querySelector('.test-class')).toBeInTheDocument();
   });
 
-  it('initializes Pannellum via Image360Player on mount', () => {
+  it('initializes Image360Player on mount', () => {
     render(<ReactImage360Player imageUrl="test.jpg" autoLoad={false} />);
     
-    expect((window as any).pannellum.viewer).toHaveBeenCalledWith(
-      expect.any(HTMLDivElement),
+    expect(Image360Player).toHaveBeenCalledWith(
       expect.objectContaining({
-        panorama: 'test.jpg',
+        imageUrl: 'test.jpg',
         autoLoad: false,
       })
     );
   });
 
-  it('destroys Pannellum instance on unmount', () => {
+  it('destroys Image360Player instance on unmount', () => {
     const { unmount } = render(<ReactImage360Player imageUrl="test.jpg" />);
+    
+    const mockPlayerInstance = vi.mocked(Image360Player).mock.results[0].value;
     unmount();
     
-    const mockViewer = (window as any).pannellum.viewer.mock.results[0].value;
-    expect(mockViewer.destroy).toHaveBeenCalled();
+    expect(mockPlayerInstance.destroy).toHaveBeenCalled();
   });
 
-  it('updates color filters without destroying the player', () => {
+  it('updates color filters without recreating the player', () => {
     const ref = React.createRef<any>();
     const { rerender } = render(
       <ReactImage360Player ref={ref} imageUrl="test.jpg" colorFilters={{ exposure: 0 }} />
@@ -49,13 +70,37 @@ describe('ReactImage360Player', () => {
     const playerInstance = ref.current;
     expect(playerInstance).toBeDefined();
 
-    const setColorFiltersSpy = vi.spyOn(playerInstance, 'setColorFilters');
-
     rerender(
       <ReactImage360Player ref={ref} imageUrl="test.jpg" colorFilters={{ exposure: 0.5 }} />
     );
 
-    expect(setColorFiltersSpy).toHaveBeenCalledWith({ exposure: 0.5 });
-    expect((window as any).pannellum.viewer).toHaveBeenCalledTimes(1);
+    expect(playerInstance.setColorFilters).toHaveBeenCalledWith({ exposure: 0.5 });
+    expect(Image360Player).toHaveBeenCalledTimes(1);
+  });
+
+  it('manages declarative hotspots dynamically', () => {
+    const hotspots1 = [
+      { id: 'hs1', yaw: 10, pitch: 20, html: '<span>1</span>' },
+    ];
+    const hotspots2 = [
+      { id: 'hs2', yaw: 30, pitch: 40, html: '<span>2</span>' },
+    ];
+
+    const { rerender } = render(
+      <ReactImage360Player imageUrl="test.jpg" hotspots={hotspots1} />
+    );
+
+    const mockPlayerInstance = vi.mocked(Image360Player).mock.results[0].value;
+    expect(mockPlayerInstance.addHTMLOverlay).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'hs1', yaw: 10, pitch: 20 })
+    );
+
+    // Update hotspots
+    rerender(<ReactImage360Player imageUrl="test.jpg" hotspots={hotspots2} />);
+    expect(mockPlayerInstance.removeHTMLOverlay).toHaveBeenCalledWith('hs1');
+    expect(mockPlayerInstance.addHTMLOverlay).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: 'hs2', yaw: 30, pitch: 40 })
+    );
   });
 });
+

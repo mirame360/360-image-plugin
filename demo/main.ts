@@ -12,19 +12,42 @@ document.addEventListener('DOMContentLoaded', () => {
     showControls: true,
   });
 
+  // Add some sample hotspots
+  player.addHTMLOverlay({
+    yaw: 45,
+    pitch: 10,
+    html: 'i',
+    onClick: () => alert('Info hotspot clicked! This is at Yaw: 45, Pitch: 10.'),
+  });
+
+  player.addHTMLOverlay({
+    yaw: -30,
+    pitch: -5,
+    html: '🔥',
+    onClick: () => alert('Hotspot clicked! This is at Yaw: -30, Pitch: -5.'),
+  });
+
   const snapshotBtn = document.getElementById('btn-snapshot');
   if (snapshotBtn) {
     snapshotBtn.addEventListener('click', () => {
-      // Get the viewport coordinates
-      const yaw = player.getYaw();
-      const pitch = player.getPitch();
-      const hfov = player.getHfov();
-
-      console.log(`Requested snapshot at Yaw: ${yaw}, Pitch: ${pitch}, HFOV: ${hfov}`);
-      
-      // In a real scenario, this would call player.takeSnapshot() which hits the backend API
-      // Since there is no backend for the Github Pages demo, we alert the coordinates
-      alert(`Snapshot requested!\nYaw: ${yaw.toFixed(2)}\nPitch: ${pitch.toFixed(2)}\nHFOV: ${hfov.toFixed(2)}\n\n(This would trigger the FFmpeg backend extraction)`);
+      player.takeSnapshot().then(blob => {
+        const url = URL.createObjectURL(blob);
+        const resultDiv = document.getElementById('snapshot-result');
+        const resultImg = document.getElementById('snapshot-img') as HTMLImageElement;
+        if (resultDiv && resultImg) {
+          resultImg.src = url;
+          resultDiv.style.display = 'block';
+          
+          // Auto hide after 4 seconds
+          setTimeout(() => {
+            resultDiv.style.display = 'none';
+            URL.revokeObjectURL(url);
+          }, 4000);
+        }
+      }).catch(err => {
+        console.error('Failed to capture snapshot', err);
+        alert('Failed to capture snapshot: ' + err.message);
+      });
     });
   }
 

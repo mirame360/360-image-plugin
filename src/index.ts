@@ -1,3 +1,5 @@
+import * as THREE from 'three';
+
 export interface WebGL360ColorFilters {
   exposure?: number;
   brightness?: number;
@@ -17,7 +19,7 @@ export interface Image360PlayerOptions {
   compass?: boolean;
   mouseZoom?: boolean;
   doubleClickZoom?: boolean;
-  touchPanAndZoom?: boolean; // Pannellum handles touch natively
+  touchPanAndZoom?: boolean;
   colorFilters?: WebGL360ColorFilters;
 }
 
@@ -29,13 +31,40 @@ export interface HotSpotOptions {
   onClick?: (e: Event) => void;
 }
 
+interface ActiveHotSpot {
+  options: HotSpotOptions;
+  element: HTMLDivElement;
+}
+
 export class Image360Player {
-  private viewer: any;
   private container: HTMLElement;
   private options: Image360PlayerOptions;
-  private gl: WebGLRenderingContext | null = null;
-  private activeProgram: WebGLProgram | null = null;
-  private programsWithFilters = new Map<WebGLProgram, any>();
+  
+  private renderer!: THREE.WebGLRenderer;
+  private scene!: THREE.Scene;
+  private camera!: THREE.PerspectiveCamera;
+  private geometry!: THREE.SphereGeometry;
+  private material!: THREE.ShaderMaterial;
+  private mesh!: THREE.Mesh;
+  private resizeObserver?: ResizeObserver;
+  private hotspotsOverlay!: HTMLDivElement;
+  
+  private yaw = 0;
+  private pitch = 0;
+  private hfov = 90;
+  
+  private isDragging = false;
+  private dragStartX = 0;
+  private dragStartY = 0;
+  private dragStartYaw = 0;
+  private dragStartPitch = 0;
+  
+  private activePointers = new Map<number, { clientX: number; clientY: number }>();
+  private initialPinchDistance: number | null = null;
+  private initialPinchHfov = 90;
+  
+  private hotspots: ActiveHotSpot[] = [];
+  
   private filters: Required<WebGL360ColorFilters> = {
     exposure: 0,
     brightness: 0,
@@ -60,254 +89,489 @@ export class Image360Player {
       return;
     }
 
-    const originalGetContext = HTMLCanvasElement.prototype.getContext;
-    const self = this;
-    HTMLCanvasElement.prototype.getContext = function (this: any, contextId: any, contextOptions?: any): any {
-      const gl = originalGetContext.call(this, contextId, contextOptions);
-      if (gl && (contextId === 'webgl' || contextId === 'experimental-webgl')) {
-        self.setupWebGLInterceptors(gl as WebGLRenderingContext);
-      }
-      return gl;
-    } as any;
+    this.initThree();
+    this.initDOM();
+    this.initListeners();
+    
+    this.loadTexture(options.imageUrl);
+    
+    // Trigger initial layout resize
+    this.resize();
+    
+    // Start loop
+    this.animate();
+  }
 
-    try {
-      if (typeof (window as any).pannellum !== 'undefined') {
-        this.viewer = (window as any).pannellum.viewer(this.container, {
-          type: 'equirectangular',
-          panorama: options.imageUrl,
-          autoLoad: options.autoLoad ?? true,
-          showControls: options.showControls ?? true,
-          compass: options.compass ?? false,
-          mouseZoom: options.mouseZoom ?? true,
-          doubleClickZoom: options.doubleClickZoom ?? true,
-          // Pinch-to-zoom and touch panning are enabled by default in Pannellum,
-          // but we can ensure multi-res and smooth touch are handled well.
-          draggable: options.touchPanAndZoom ?? true,
-        });
-      } else {
-        console.error('Pannellum is not loaded.');
-      }
-    } finally {
-      HTMLCanvasElement.prototype.getContext = originalGetContext;
+  private initThree(): void {
+    this.scene = new THREE.Scene();
+    
+    // Set up camera (aspect ratio will be adjusted on resize)
+    this.camera = new THREE.PerspectiveCamera(this.hfov, 1, 0.1, 1000);
+    this.updateCameraRotation();
+
+    // Create inverted sphere geometry so texture renders on the inside
+    this.geometry = new THREE.SphereGeometry(500, 60, 40);
+    this.geometry.scale(-1, 1, 1);
+
+    // Create shader material with our native WebGL color adjusting filters
+    this.material = new THREE.ShaderMaterial({
+      side: THREE.DoubleSide,
+      uniforms: {
+        map: { value: null },
+        uExposure: { value: this.filters.exposure },
+        uBrightness: { value: this.filters.brightness },
+        uContrast: { value: this.filters.contrast },
+        uSaturation: { value: this.filters.saturation },
+        uTemperature: { value: this.filters.temperature },
+        uTint: { value: this.filters.tint },
+        uHighlight: { value: this.filters.highlight },
+        uShadow: { value: this.filters.shadow },
+      },
+      vertexShader: `
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform sampler2D map;
+        uniform float uExposure;
+        uniform float uBrightness;
+        uniform float uContrast;
+        uniform float uSaturation;
+        uniform float uTemperature;
+        uniform float uTint;
+        uniform float uHighlight;
+        uniform float uShadow;
+
+        varying vec2 vUv;
+
+        vec3 applyFilters(vec3 color) {
+          // Exposure
+          color *= pow(2.0, uExposure);
+          
+          // Brightness
+          color += uBrightness;
+          
+          // Contrast
+          color = (color - 0.5) * uContrast + 0.5;
+          
+          // Saturation
+          float luma = dot(color, vec3(0.299, 0.587, 0.114));
+          color = mix(vec3(luma), color, uSaturation);
+          
+          // Highlight & Shadow
+          float shadowFactor = uShadow * (1.0 - smoothstep(0.0, 0.7, luma));
+          color = color + color * shadowFactor;
+          
+          float highlightFactor = uHighlight * smoothstep(0.3, 1.0, luma);
+          color = color + color * highlightFactor;
+          
+          // Temperature & Tint
+          color.r += uTemperature * 0.08;
+          color.b -= uTemperature * 0.08;
+          color.g += uTint * 0.06;
+          color.r -= uTint * 0.03;
+          color.b -= uTint * 0.03;
+          
+          return clamp(color, 0.0, 1.0);
+        }
+
+        void main() {
+          vec4 texel = texture2D(map, vUv);
+          if (texel.a < 0.01) discard;
+          gl_FragColor = vec4(applyFilters(texel.rgb), texel.a);
+        }
+      `,
+    });
+
+    this.mesh = new THREE.Mesh(this.geometry, this.material);
+    this.scene.add(this.mesh);
+
+    // Initialize renderer
+    this.renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      alpha: false,
+      preserveDrawingBuffer: true, // Required for taking snapshots
+    });
+    this.renderer.setPixelRatio(window.devicePixelRatio || 1);
+  }
+
+  private initDOM(): void {
+    // Clear container
+    this.container.innerHTML = '';
+    this.container.style.position = 'relative';
+    this.container.style.overflow = 'hidden';
+
+    // Style the canvas
+    const canvas = this.renderer.domElement;
+    canvas.style.width = '100%';
+    canvas.style.height = '100%';
+    canvas.style.display = 'block';
+    this.container.appendChild(canvas);
+
+    // Hotspots overlay container
+    this.hotspotsOverlay = document.createElement('div');
+    this.hotspotsOverlay.style.position = 'absolute';
+    this.hotspotsOverlay.style.top = '0';
+    this.hotspotsOverlay.style.left = '0';
+    this.hotspotsOverlay.style.width = '100%';
+    this.hotspotsOverlay.style.height = '100%';
+    this.hotspotsOverlay.style.pointerEvents = 'none';
+    this.hotspotsOverlay.style.overflow = 'hidden';
+    this.hotspotsOverlay.style.zIndex = '5';
+    this.container.appendChild(this.hotspotsOverlay);
+  }
+
+  private initListeners(): void {
+    const canvas = this.renderer.domElement;
+    
+    // Mouse / Touch Dragging and Panning via PointerEvents
+    canvas.addEventListener('pointerdown', this.onPointerDown);
+    canvas.addEventListener('pointermove', this.onPointerMove);
+    canvas.addEventListener('pointerup', this.onPointerUp);
+    canvas.addEventListener('pointercancel', this.onPointerUp);
+    
+    // Zoom via Wheel
+    if (this.options.mouseZoom !== false) {
+      canvas.addEventListener('wheel', this.onWheel, { passive: false });
+    }
+    
+    // Double click to zoom
+    if (this.options.doubleClickZoom !== false) {
+      canvas.addEventListener('dblclick', this.onDoubleClick);
+    }
+
+    // Handle Resize
+    if (typeof ResizeObserver !== 'undefined') {
+      this.resizeObserver = new ResizeObserver(() => this.resize());
+      this.resizeObserver.observe(this.container);
+    } else {
+      window.addEventListener('resize', this.resize);
     }
   }
 
-  /**
-   * Updates the 360 image URL and reinitializes the viewer.
-   */
+  private loadTexture(url: string): void {
+    const loader = new THREE.TextureLoader();
+    loader.setCrossOrigin('anonymous');
+    loader.load(
+      url,
+      (texture) => {
+        texture.colorSpace = THREE.SRGBColorSpace;
+        texture.minFilter = THREE.LinearFilter;
+        texture.magFilter = THREE.LinearFilter;
+        texture.generateMipmaps = false;
+        
+        if (this.material) {
+          const oldTexture = this.material.uniforms.map.value;
+          if (oldTexture) {
+            oldTexture.dispose();
+          }
+          this.material.uniforms.map.value = texture;
+          this.material.needsUpdate = true;
+          this.triggerRedraw();
+        }
+      },
+      undefined,
+      (err) => {
+        console.error('Failed to load panorama image texture', err);
+      }
+    );
+  }
+
+  private updateCameraRotation(): void {
+    const phi = THREE.MathUtils.degToRad(90 - this.pitch);
+    const theta = THREE.MathUtils.degToRad(this.yaw);
+
+    const target = new THREE.Vector3(
+      500 * Math.sin(phi) * Math.cos(theta),
+      500 * Math.cos(phi),
+      500 * Math.sin(phi) * Math.sin(theta)
+    );
+    this.camera.lookAt(target);
+  }
+
+  private updateCameraFov(): void {
+    const width = this.container.clientWidth || 800;
+    const height = this.container.clientHeight || 600;
+    const aspect = width / height;
+
+    // Convert horizontal FOV (hfov) to vertical FOV for Three.js
+    const hfovRad = THREE.MathUtils.degToRad(this.hfov);
+    const vfovRad = 2 * Math.atan(Math.tan(hfovRad / 2) / aspect);
+    this.camera.fov = THREE.MathUtils.radToDeg(vfovRad);
+    this.camera.updateProjectionMatrix();
+  }
+
+  private updateHotspots(): void {
+    if (!this.camera || !this.container) return;
+
+    const width = this.container.clientWidth || 800;
+    const height = this.container.clientHeight || 600;
+
+    const cameraDir = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
+
+    this.hotspots.forEach(hs => {
+      // Calculate 3D position vector on sphere of radius 500
+      const phi = THREE.MathUtils.degToRad(90 - hs.options.pitch);
+      const theta = THREE.MathUtils.degToRad(hs.options.yaw);
+      const target = new THREE.Vector3(
+        500 * Math.sin(phi) * Math.cos(theta),
+        500 * Math.cos(phi),
+        500 * Math.sin(phi) * Math.sin(theta)
+      );
+      
+      const vector = target.clone();
+      vector.project(this.camera);
+
+      const hsDir = target.clone().normalize();
+      const dot = cameraDir.dot(hsDir);
+
+      if (dot < 0 || vector.z > 1) {
+        hs.element.style.display = 'none';
+      } else {
+        hs.element.style.display = 'block';
+        
+        const x = (vector.x * 0.5 + 0.5) * width;
+        const y = (-(vector.y * 0.5) + 0.5) * height;
+        
+        hs.element.style.left = `${x}px`;
+        hs.element.style.top = `${y}px`;
+      }
+    });
+  }
+
+  private resize = (): void => {
+    if (!this.container || !this.renderer || !this.camera) return;
+    const width = this.container.clientWidth || 800;
+    const height = this.container.clientHeight || 600;
+
+    this.camera.aspect = width / height;
+    this.updateCameraFov();
+    this.renderer.setSize(width, height, false);
+    this.updateHotspots();
+  };
+
+  private animate = (): void => {
+    if (!this.renderer) return;
+    requestAnimationFrame(this.animate);
+    this.renderer.render(this.scene, this.camera);
+  };
+
+  // --- Input Handlers ---
+
+  private onPointerDown = (e: PointerEvent): void => {
+    const canvas = this.renderer.domElement;
+    canvas.setPointerCapture(e.pointerId);
+    
+    this.activePointers.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
+
+    if (this.activePointers.size === 1) {
+      this.isDragging = true;
+      this.dragStartX = e.clientX;
+      this.dragStartY = e.clientY;
+      this.dragStartYaw = this.yaw;
+      this.dragStartPitch = this.pitch;
+    } else if (this.activePointers.size === 2 && this.options.touchPanAndZoom !== false) {
+      this.isDragging = false;
+      const pointers = Array.from(this.activePointers.values());
+      const dx = pointers[0].clientX - pointers[1].clientX;
+      const dy = pointers[0].clientY - pointers[1].clientY;
+      this.initialPinchDistance = Math.sqrt(dx * dx + dy * dy);
+      this.initialPinchHfov = this.hfov;
+    }
+  };
+
+  private onPointerMove = (e: PointerEvent): void => {
+    if (!this.activePointers.has(e.pointerId)) return;
+    
+    this.activePointers.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
+
+    if (this.isDragging && this.activePointers.size === 1) {
+      const deltaX = e.clientX - this.dragStartX;
+      const deltaY = e.clientY - this.dragStartY;
+      
+      const sensitivity = this.hfov / 600; // Adjust speed based on FOV
+      
+      this.yaw = this.dragStartYaw - deltaX * sensitivity;
+      this.pitch = this.dragStartPitch + deltaY * sensitivity;
+      this.pitch = Math.max(-85, Math.min(85, this.pitch));
+      
+      this.updateCameraRotation();
+      this.updateHotspots();
+    } else if (this.activePointers.size === 2 && this.initialPinchDistance !== null) {
+      const pointers = Array.from(this.activePointers.values());
+      const dx = pointers[0].clientX - pointers[1].clientX;
+      const dy = pointers[0].clientY - pointers[1].clientY;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      
+      const factor = this.initialPinchDistance / distance;
+      this.hfov = this.initialPinchHfov * factor;
+      this.hfov = Math.max(30, Math.min(120, this.hfov));
+      
+      this.updateCameraFov();
+      this.updateHotspots();
+    }
+  };
+
+  private onPointerUp = (e: PointerEvent): void => {
+    this.activePointers.delete(e.pointerId);
+    
+    if (this.activePointers.size === 0) {
+      this.isDragging = false;
+      this.initialPinchDistance = null;
+    } else if (this.activePointers.size === 1) {
+      // Re-initialize dragging for the single remaining pointer
+      const remainingPointerId = Array.from(this.activePointers.keys())[0];
+      const pointer = this.activePointers.get(remainingPointerId)!;
+      this.isDragging = true;
+      this.dragStartX = pointer.clientX;
+      this.dragStartY = pointer.clientY;
+      this.dragStartYaw = this.yaw;
+      this.dragStartPitch = this.pitch;
+    }
+  };
+
+  private onWheel = (e: WheelEvent): void => {
+    e.preventDefault();
+    this.hfov += e.deltaY * 0.05;
+    this.hfov = Math.max(30, Math.min(120, this.hfov));
+    
+    this.updateCameraFov();
+    this.updateHotspots();
+  };
+
+  private onDoubleClick = (): void => {
+    if (this.hfov < 50) {
+      this.hfov = 90;
+    } else {
+      this.hfov = 40;
+    }
+    this.updateCameraFov();
+    this.updateHotspots();
+  };
+
+  // --- Public API ---
+
   public setImageUrl(url: string): void {
     this.options.imageUrl = url;
-    if (!this.checkWebGLSupport()) {
-      this.renderFallback();
-      return;
-    }
-
-    if (this.viewer) {
-      this.viewer.destroy();
-      this.viewer = null;
-    }
-    this.container.innerHTML = '';
-
-    const originalGetContext = HTMLCanvasElement.prototype.getContext;
-    const self = this;
-    HTMLCanvasElement.prototype.getContext = function (this: any, contextId: any, contextOptions?: any): any {
-      const gl = originalGetContext.call(this, contextId, contextOptions);
-      if (gl && (contextId === 'webgl' || contextId === 'experimental-webgl')) {
-        self.setupWebGLInterceptors(gl as WebGLRenderingContext);
-      }
-      return gl;
-    } as any;
-
-    try {
-      if (typeof (window as any).pannellum !== 'undefined') {
-        this.viewer = (window as any).pannellum.viewer(this.container, {
-          type: 'equirectangular',
-          panorama: url,
-          autoLoad: this.options.autoLoad ?? true,
-          showControls: this.options.showControls ?? true,
-          compass: this.options.compass ?? false,
-          mouseZoom: this.options.mouseZoom ?? true,
-          doubleClickZoom: this.options.doubleClickZoom ?? true,
-          draggable: this.options.touchPanAndZoom ?? true,
-        });
-      } else {
-        console.error('Pannellum is not loaded.');
-      }
-    } finally {
-      HTMLCanvasElement.prototype.getContext = originalGetContext;
-    }
+    this.loadTexture(url);
   }
 
-  /**
-   * Updates the color filters in real-time.
-   */
   public setColorFilters(filters: WebGL360ColorFilters): void {
     this.filters = { ...this.filters, ...filters };
-    if (this.gl && this.activeProgram && this.programsWithFilters.has(this.activeProgram)) {
-      this.applyCurrentFilters(this.gl, this.activeProgram);
+    if (this.material) {
+      this.material.uniforms.uExposure.value = this.filters.exposure;
+      this.material.uniforms.uBrightness.value = this.filters.brightness;
+      this.material.uniforms.uContrast.value = this.filters.contrast;
+      this.material.uniforms.uSaturation.value = this.filters.saturation;
+      this.material.uniforms.uTemperature.value = this.filters.temperature;
+      this.material.uniforms.uTint.value = this.filters.tint;
+      this.material.uniforms.uHighlight.value = this.filters.highlight;
+      this.material.uniforms.uShadow.value = this.filters.shadow;
       this.triggerRedraw();
     }
   }
 
-  /**
-   * Gets the active color filters.
-   */
   public getColorFilters(): Required<WebGL360ColorFilters> {
     return { ...this.filters };
   }
 
-  private triggerRedraw(): void {
-    if (this.viewer) {
-      const renderer = this.viewer.getRenderer();
-      if (renderer && typeof renderer.render === 'function') {
-        try {
-          const yaw = this.viewer.getYaw() * Math.PI / 180;
-          const pitch = this.viewer.getPitch() * Math.PI / 180;
-          const hfov = this.viewer.getHfov() * Math.PI / 180;
-          renderer.render(yaw, pitch, hfov);
-        } catch (e) {
-          console.warn('Failed to trigger manual redraw on Pannellum renderer', e);
-        }
-      }
-    }
-  }
-
-  private setupWebGLInterceptors(gl: WebGLRenderingContext): void {
-    this.gl = gl;
-    const self = this;
-    const shaderTypes = new Map<WebGLShader, number>();
-
-    // Intercept createShader to remember the type of each shader
-    const originalCreateShader = gl.createShader;
-    if (originalCreateShader) {
-      gl.createShader = function (type: number) {
-        const shader = originalCreateShader.call(this, type);
-        if (shader) {
-          shaderTypes.set(shader, type);
-        }
-        return shader;
-      };
+  public addHTMLOverlay(options: HotSpotOptions): void {
+    const id = options.id || `hotspot-${Math.random().toString(36).substr(2, 9)}`;
+    
+    const element = document.createElement('div');
+    element.className = 'custom-html-hotspot';
+    element.style.position = 'absolute';
+    element.style.pointerEvents = 'auto';
+    element.style.transform = 'translate(-50%, -50%)';
+    element.style.cursor = options.onClick ? 'pointer' : 'default';
+    element.innerHTML = options.html;
+    
+    if (options.onClick) {
+      element.addEventListener('click', options.onClick);
     }
     
-    // Intercept shaderSource to inject our filter code into the fragment shader
-    const originalShaderSource = gl.shaderSource;
-    if (originalShaderSource) {
-      gl.shaderSource = function (shader, source) {
-        const type = shaderTypes.get(shader);
-        const isFragmentShader = type === gl.FRAGMENT_SHADER;
-        
-        if (isFragmentShader && (source.indexOf('texture2d') !== -1 || source.indexOf('texture2D') !== -1 || source.indexOf('textureCube') !== -1)) {
-          const filterDef = `
-            uniform float uExposure;
-            uniform float uBrightness;
-            uniform float uContrast;
-            uniform float uSaturation;
-            uniform float uTemperature;
-            uniform float uTint;
-            uniform float uHighlight;
-            uniform float uShadow;
+    // Stop propagation of pointer events to prevent panning when dragging/clicking on hotspots
+    element.addEventListener('pointerdown', (e) => e.stopPropagation());
+    element.addEventListener('touchstart', (e) => e.stopPropagation(), { passive: false });
 
-            vec3 applyFilters(vec3 color) {
-              // Exposure
-              color *= pow(2.0, uExposure);
-              
-              // Brightness
-              color += uBrightness;
-              
-              // Contrast
-              color = (color - 0.5) * uContrast + 0.5;
-              
-              // Saturation
-              float luma = dot(color, vec3(0.299, 0.587, 0.114));
-              color = mix(vec3(luma), color, uSaturation);
-              
-              // Highlight & Shadow
-              float shadowFactor = uShadow * (1.0 - smoothstep(0.0, 0.7, luma));
-              color = color + color * shadowFactor;
-              
-              float highlightFactor = uHighlight * smoothstep(0.3, 1.0, luma);
-              color = color + color * highlightFactor;
-              
-              // Temperature & Tint
-              color.r += uTemperature * 0.08;
-              color.b -= uTemperature * 0.08;
-              color.g += uTint * 0.06;
-              color.r -= uTint * 0.03;
-              color.b -= uTint * 0.03;
-              
-              return clamp(color, 0.0, 1.0);
-            }
-          `;
-          
-          // 1. Declare custom_FragColor at the start of main()
-          source = source.replace(/void\s+main\s*\(\s*(?:void)?\s*\)\s*\{/g, 
-            'void main() {\nvec4 custom_FragColor = vec4(0.0);');
+    this.hotspotsOverlay.appendChild(element);
+    
+    this.hotspots.push({
+      options: { ...options, id },
+      element,
+    });
 
-          // 2. Replace all other occurrences of gl_FragColor with custom_FragColor
-          source = source.replace(/gl_FragColor/g, 'custom_FragColor');
+    this.updateHotspots();
+  }
 
-          // 3. Prepend our filter uniforms and helper function
-          source = filterDef + source;
-          
-          // 4. Find the last closing brace and output gl_FragColor with filters applied
-          let lastBrace = source.lastIndexOf('}');
-          if (lastBrace !== -1) {
-            source = source.substring(0, lastBrace) + `
-              gl_FragColor = vec4(applyFilters(custom_FragColor.rgb), custom_FragColor.a);
-            }` + source.substring(lastBrace + 1);
-          }
-        }
-        originalShaderSource.call(this, shader, source);
-      };
-    }
-
-    // Intercept linkProgram to grab uniform locations
-    const originalLinkProgram = gl.linkProgram;
-    if (originalLinkProgram) {
-      gl.linkProgram = function (program) {
-        originalLinkProgram.call(this, program);
-        
-        const locExposure = gl.getUniformLocation(program, 'uExposure');
-        if (locExposure !== null) {
-          self.programsWithFilters.set(program, {
-            locExposure,
-            locBrightness: gl.getUniformLocation(program, 'uBrightness'),
-            locContrast: gl.getUniformLocation(program, 'uContrast'),
-            locSaturation: gl.getUniformLocation(program, 'uSaturation'),
-            locTemperature: gl.getUniformLocation(program, 'uTemperature'),
-            locTint: gl.getUniformLocation(program, 'uTint'),
-            locHighlight: gl.getUniformLocation(program, 'uHighlight'),
-            locShadow: gl.getUniformLocation(program, 'uShadow'),
-          });
-        }
-      };
-    }
-
-    // Intercept useProgram to keep track of the active program and apply current filter values
-    const originalUseProgram = gl.useProgram;
-    if (originalUseProgram) {
-      gl.useProgram = function (program) {
-        originalUseProgram.call(this, program);
-        self.activeProgram = program;
-        if (program && self.programsWithFilters.has(program)) {
-          self.applyCurrentFilters(gl, program);
-        }
-      };
+  public removeHTMLOverlay(id: string): void {
+    const index = this.hotspots.findIndex(hs => hs.options.id === id);
+    if (index !== -1) {
+      const hs = this.hotspots[index];
+      this.hotspotsOverlay.removeChild(hs.element);
+      this.hotspots.splice(index, 1);
     }
   }
 
-  private applyCurrentFilters(gl: WebGLRenderingContext, program: WebGLProgram): void {
-    const locs = this.programsWithFilters.get(program);
-    if (!locs) return;
+  public getYaw(): number {
+    // Normalize yaw between -180 and 180 degrees
+    let normYaw = this.yaw % 360;
+    if (normYaw > 180) normYaw -= 360;
+    if (normYaw < -180) normYaw += 360;
+    return normYaw;
+  }
 
-    gl.uniform1f(locs.locExposure, this.filters.exposure);
-    gl.uniform1f(locs.locBrightness, this.filters.brightness);
-    gl.uniform1f(locs.locContrast, this.filters.contrast);
-    gl.uniform1f(locs.locSaturation, this.filters.saturation);
-    gl.uniform1f(locs.locTemperature, this.filters.temperature);
-    gl.uniform1f(locs.locTint, this.filters.tint);
-    gl.uniform1f(locs.locHighlight, this.filters.highlight);
-    gl.uniform1f(locs.locShadow, this.filters.shadow);
+  public getPitch(): number {
+    return this.pitch;
+  }
+
+  public getHfov(): number {
+    return this.hfov;
+  }
+
+  public takeSnapshot(): Promise<Blob> {
+    if (!this.renderer) return Promise.reject(new Error('Renderer not initialized'));
+    
+    // Render immediately to ensure the drawing buffer contains the latest frame
+    this.renderer.render(this.scene, this.camera);
+    
+    return new Promise((resolve, reject) => {
+      this.renderer.domElement.toBlob((blob) => {
+        if (blob) {
+          resolve(blob);
+        } else {
+          reject(new Error('Failed to capture canvas snapshot'));
+        }
+      }, 'image/png');
+    });
+  }
+
+  public destroy(): void {
+    if (this.resizeObserver) {
+      this.resizeObserver.disconnect();
+    } else {
+      window.removeEventListener('resize', this.resize);
+    }
+
+    // Clean up DOM
+    this.container.innerHTML = '';
+
+    // Dispose Three.js objects
+    if (this.geometry) this.geometry.dispose();
+    if (this.material) {
+      if (this.material.uniforms.map.value) {
+        this.material.uniforms.map.value.dispose();
+      }
+      this.material.dispose();
+    }
+    if (this.renderer) this.renderer.dispose();
+  }
+
+  private triggerRedraw(): void {
+    // With requestAnimationFrame loop running continuously, redraw is implicit.
   }
 
   private checkWebGLSupport(): boolean {
@@ -329,67 +593,6 @@ export class Image360Player {
         </div>
       </div>
     `;
-  }
-
-  /**
-   * Injects a custom HTML element into the player at specific coordinates
-   */
-  public addHTMLOverlay(options: HotSpotOptions): void {
-    if (!this.viewer) return;
-
-    const id = options.id || `hotspot-${Math.random().toString(36).substr(2, 9)}`;
-
-    const createTooltipFunc = (hotSpotDiv: HTMLElement, args: any) => {
-      hotSpotDiv.innerHTML = args.html;
-      hotSpotDiv.style.cursor = args.onClick ? 'pointer' : 'default';
-      hotSpotDiv.classList.add('custom-html-hotspot');
-      
-      if (args.onClick) {
-        hotSpotDiv.addEventListener('click', args.onClick);
-      }
-      
-      // Stop events from propagating to the viewer so we don't accidentally pan when interacting with HTML
-      hotSpotDiv.addEventListener('pointerdown', (e) => e.stopPropagation());
-      hotSpotDiv.addEventListener('touchstart', (e) => e.stopPropagation(), { passive: false });
-    };
-
-    this.viewer.addHotSpot({
-      id: id,
-      pitch: options.pitch,
-      yaw: options.yaw,
-      createTooltipFunc: createTooltipFunc,
-      createTooltipArgs: { html: options.html, onClick: options.onClick },
-    });
-  }
-
-  public removeHTMLOverlay(id: string): void {
-    if (this.viewer) {
-      this.viewer.removeHotSpot(id);
-    }
-  }
-
-  public getYaw(): number {
-    return this.viewer ? this.viewer.getYaw() : 0;
-  }
-
-  public getPitch(): number {
-    return this.viewer ? this.viewer.getPitch() : 0;
-  }
-
-  public getHfov(): number {
-    return this.viewer ? this.viewer.getHfov() : 0;
-  }
-
-  public takeSnapshot(): Promise<Blob> {
-    return Promise.resolve(new Blob());
-  }
-
-  public destroy(): void {
-    if (this.viewer) {
-      this.viewer.destroy();
-      this.viewer = null;
-    }
-    this.container.innerHTML = '';
   }
 }
 
