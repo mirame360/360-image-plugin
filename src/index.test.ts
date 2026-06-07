@@ -131,6 +131,72 @@ describe('Image360Player', () => {
     expect(container.querySelector('.my-hotspot')).not.toBeInTheDocument();
   });
 
+  it('should generate default styled info hotspot if html option is omitted', () => {
+    const player = new Image360Player({
+      container,
+      imageUrl: 'test.jpg'
+    });
+
+    player.addHTMLOverlay({
+      id: 'hotspot-default',
+      yaw: -30,
+      pitch: -5,
+      text: 'Click here for details'
+    });
+
+    // Default hotspot has class 'default-hotspot-marker'
+    const marker = container.querySelector('.default-hotspot-marker');
+    expect(marker).toBeInTheDocument();
+    
+    const tooltip = container.querySelector('.default-hotspot-tooltip');
+    expect(tooltip).toBeInTheDocument();
+    expect(tooltip?.textContent?.trim()).toBe('Click here for details');
+  });
+
+  it('should trigger events via the Event Emitter system', () => {
+    const player = new Image360Player({
+      container,
+      imageUrl: 'test.jpg'
+    });
+
+    const loadCallback = vi.fn();
+    const viewchangeCallback = vi.fn();
+    const zoomCallback = vi.fn();
+
+    player.on('load', loadCallback);
+    player.on('viewchange', viewchangeCallback);
+    player.on('zoom', zoomCallback);
+
+    // Trigger texture load manually or through API
+    player.setImageUrl('new-image.jpg');
+    expect(loadCallback).toHaveBeenCalled();
+
+    // Dispatch a wheel event to trigger viewchange and zoom events
+    const canvas = container.querySelector('canvas')!;
+    const wheelEvent = new WheelEvent('wheel', { deltaY: 20 });
+    canvas.dispatchEvent(wheelEvent);
+
+    expect(zoomCallback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        hfov: 91
+      })
+    );
+    expect(viewchangeCallback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        yaw: 0,
+        pitch: 0,
+        hfov: 91
+      })
+    );
+
+    // Unregister callback
+    player.off('load', loadCallback);
+    loadCallback.mockClear();
+
+    player.setImageUrl('another-image.jpg');
+    expect(loadCallback).not.toHaveBeenCalled();
+  });
+
   it('should clean up and dispose Three.js objects on destroy', () => {
     const player = new Image360Player({
       container,
@@ -148,4 +214,3 @@ describe('Image360Player', () => {
     expect(rendererInstance.dispose).toHaveBeenCalled();
   });
 });
-

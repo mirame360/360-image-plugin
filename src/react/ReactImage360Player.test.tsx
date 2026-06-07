@@ -16,6 +16,8 @@ vi.mock('../index', async (importOriginal) => {
     this.getYaw = vi.fn().mockReturnValue(0);
     this.getPitch = vi.fn().mockReturnValue(0);
     this.getHfov = vi.fn().mockReturnValue(90);
+    this.on = vi.fn();
+    this.off = vi.fn();
     return this;
   });
   return {
@@ -102,5 +104,44 @@ describe('ReactImage360Player', () => {
       expect.objectContaining({ id: 'hs2', yaw: 30, pitch: 40 })
     );
   });
-});
 
+  it('forwards player events to React component callback props', () => {
+    const onLoadMock = vi.fn();
+    const onViewChangeMock = vi.fn();
+    const onZoomMock = vi.fn();
+    const onErrorMock = vi.fn();
+    const onClickMock = vi.fn();
+
+    render(
+      <ReactImage360Player
+        imageUrl="test.jpg"
+        onLoad={onLoadMock}
+        onViewChange={onViewChangeMock}
+        onZoom={onZoomMock}
+        onError={onErrorMock}
+        onClick={onClickMock}
+      />
+    );
+
+    const mockPlayerInstance = vi.mocked(Image360Player).mock.results[0].value;
+    expect(mockPlayerInstance.on).toHaveBeenCalledWith('load', expect.any(Function));
+    expect(mockPlayerInstance.on).toHaveBeenCalledWith('viewchange', expect.any(Function));
+    expect(mockPlayerInstance.on).toHaveBeenCalledWith('zoom', expect.any(Function));
+    expect(mockPlayerInstance.on).toHaveBeenCalledWith('error', expect.any(Function));
+    expect(mockPlayerInstance.on).toHaveBeenCalledWith('click', expect.any(Function));
+
+    // Retrieve and trigger load callback
+    const loadCall = vi.mocked(mockPlayerInstance.on).mock.calls.find((call: any) => call[0] === 'load');
+    expect(loadCall).toBeDefined();
+    const loadCallback = loadCall![1];
+    loadCallback();
+    expect(onLoadMock).toHaveBeenCalled();
+
+    // Retrieve and trigger viewchange callback
+    const viewchangeCall = vi.mocked(mockPlayerInstance.on).mock.calls.find((call: any) => call[0] === 'viewchange');
+    expect(viewchangeCall).toBeDefined();
+    const viewchangeCallback = viewchangeCall![1];
+    viewchangeCallback({ yaw: 15, pitch: -5, hfov: 90 });
+    expect(onViewChangeMock).toHaveBeenCalledWith({ yaw: 15, pitch: -5, hfov: 90 });
+  });
+});

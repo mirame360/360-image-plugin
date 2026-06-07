@@ -12,19 +12,82 @@ document.addEventListener('DOMContentLoaded', () => {
     showControls: true,
   });
 
-  // Add some sample hotspots
+  // --- Event Console Logger Helper ---
+  const consoleLogs = document.getElementById('console-logs');
+  const clearConsoleBtn = document.getElementById('btn-clear-console');
+
+  function logToConsole(tag: string, text: string) {
+    if (!consoleLogs) return;
+    const logEntry = document.createElement('div');
+    logEntry.className = 'console-log-entry';
+    logEntry.innerHTML = `<span class="console-log-tag">[${tag}]</span> ${text}`;
+    consoleLogs.appendChild(logEntry);
+
+    // Keep last 50 logs only
+    while (consoleLogs.children.length > 50) {
+      consoleLogs.removeChild(consoleLogs.firstChild!);
+    }
+    
+    // Auto scroll to bottom
+    consoleLogs.scrollTop = consoleLogs.scrollHeight;
+  }
+
+  if (clearConsoleBtn) {
+    clearConsoleBtn.addEventListener('click', () => {
+      if (consoleLogs) {
+        consoleLogs.innerHTML = '<div class="console-log-entry"><span class="console-log-tag">[system]</span> Console cleared.</div>';
+      }
+    });
+  }
+
+  // --- Bind Event Listeners ---
+  player.on('load', () => {
+    logToConsole('load', 'Panorama image loaded successfully!');
+  });
+
+  player.on('error', (err) => {
+    logToConsole('error', `Loading failed: ${err.message}`);
+  });
+
+  player.on('viewchange', (data) => {
+    // Throttled logging is usually preferred, but for demo direct prints show real-time response
+    logToConsole('viewchange', `Yaw: ${data.yaw.toFixed(2)}° | Pitch: ${data.pitch.toFixed(2)}° | HFov: ${data.hfov.toFixed(1)}°`);
+  });
+
+  player.on('zoom', (data) => {
+    logToConsole('zoom', `Field of view changed to: ${data.hfov.toFixed(1)}°`);
+  });
+
+  player.on('click', (data) => {
+    logToConsole('click', `Viewer clicked at Yaw: ${data.yaw.toFixed(2)}° | Pitch: ${data.pitch.toFixed(2)}°`);
+  });
+
+  // --- Add Custom and Default Hotspots ---
+  
+  // 1. Custom HTML hotspot
   player.addHTMLOverlay({
     yaw: 45,
     pitch: 10,
     html: 'i',
-    onClick: () => alert('Info hotspot clicked! This is at Yaw: 45, Pitch: 10.'),
+    onClick: () => alert('Custom HTML hotspot clicked! This is at Yaw: 45, Pitch: 10.'),
   });
 
+  // 2. Default styled info hotspot with hover tooltip and click redirect
   player.addHTMLOverlay({
     yaw: -30,
     pitch: -5,
-    html: '🔥',
-    onClick: () => alert('Hotspot clicked! This is at Yaw: -30, Pitch: -5.'),
+    text: 'Learn about the BMA collection',
+    url: 'https://artbma.org/',
+    target: '_blank',
+  });
+
+  // 3. Default styled link hotspot
+  player.addHTMLOverlay({
+    yaw: 120,
+    pitch: -15,
+    text: 'Visit Three.js website',
+    url: 'https://threejs.org/',
+    target: '_blank',
   });
 
   const snapshotBtn = document.getElementById('btn-snapshot');
@@ -38,6 +101,8 @@ document.addEventListener('DOMContentLoaded', () => {
           resultImg.src = url;
           resultDiv.style.display = 'block';
           
+          logToConsole('snapshot', 'Captured WebGL context snapshot.');
+
           // Auto hide after 4 seconds
           setTimeout(() => {
             resultDiv.style.display = 'none';
@@ -47,6 +112,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }).catch(err => {
         console.error('Failed to capture snapshot', err);
         alert('Failed to capture snapshot: ' + err.message);
+        logToConsole('error', 'Snapshot failed: ' + err.message);
       });
     });
   }
@@ -63,6 +129,7 @@ document.addEventListener('DOMContentLoaded', () => {
           URL.revokeObjectURL(currentObjectUrl);
         }
         currentObjectUrl = URL.createObjectURL(file);
+        logToConsole('image-upload', `Loading new panorama: ${file.name}`);
         player.setImageUrl(currentObjectUrl);
       }
     });
@@ -115,6 +182,7 @@ document.addEventListener('DOMContentLoaded', () => {
           updateFilter(item.id, item.default);
         }
       });
+      logToConsole('reset', 'Reset all color filters.');
     });
   }
 });

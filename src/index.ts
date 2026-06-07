@@ -27,13 +27,27 @@ export interface HotSpotOptions {
   yaw: number;
   pitch: number;
   id?: string;
-  html: string;
+  html?: string;
+  text?: string;
+  url?: string;
+  target?: string;
+  cssClass?: string;
   onClick?: (e: Event) => void;
 }
 
 interface ActiveHotSpot {
   options: HotSpotOptions;
   element: HTMLDivElement;
+}
+
+export type PlayerEvent = 'load' | 'viewchange' | 'zoom' | 'error' | 'click';
+
+export interface PlayerEventMap {
+  'load': undefined;
+  'viewchange': { yaw: number; pitch: number; hfov: number };
+  'zoom': { hfov: number };
+  'error': Error;
+  'click': { yaw: number; pitch: number; event: PointerEvent };
 }
 
 export class Image360Player {
@@ -48,6 +62,8 @@ export class Image360Player {
   private mesh!: THREE.Mesh;
   private resizeObserver?: ResizeObserver;
   private hotspotsOverlay!: HTMLDivElement;
+  private vrButton?: HTMLButtonElement;
+  private xrSession: any = null;
   
   private yaw = 0;
   private pitch = 0;
@@ -76,6 +92,21 @@ export class Image360Player {
     shadow: 0,
   };
 
+  // Inertia and Event emitter variables
+  private listeners: { [key in PlayerEvent]?: ((data: any) => void)[] } = {};
+  private velocityYaw = 0;
+  private velocityPitch = 0;
+  private isInertialGliding = false;
+  private lastPointerTime = 0;
+  private lastPointerX = 0;
+  private lastPointerY = 0;
+  private lastFrameTime = 0;
+
+  // Click detection variables
+  private clickStartX = 0;
+  private clickStartY = 0;
+  private clickStartTime = 0;
+
   constructor(options: Image360PlayerOptions) {
     this.options = options;
     this.container = options.container;
@@ -92,6 +123,7 @@ export class Image360Player {
     this.initThree();
     this.initDOM();
     this.initListeners();
+    this.initXR();
     
     this.loadTexture(options.imageUrl);
     
@@ -99,7 +131,8 @@ export class Image360Player {
     this.resize();
     
     // Start loop
-    this.animate();
+    this.lastFrameTime = Date.now();
+    this.renderer.setAnimationLoop(this.animate);
   }
 
   private initThree(): void {
@@ -252,6 +285,93 @@ export class Image360Player {
     }
   }
 
+  private initXR(): void {
+    if (typeof navigator !== 'undefined' && 'xr' in navigator) {
+      this.renderer.xr.enabled = true;
+      navigator.xr?.isSessionSupported('immersive-vr').then((supported) => {
+        if (supported) {
+          this.createVRButton();
+        }
+      });
+    }
+  }
+
+  private createVRButton(): void {
+    this.vrButton = document.createElement('button');
+    this.vrButton.className = 'webxr-vr-button';
+    this.vrButton.innerHTML = `
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 6px; display: block;"><path d="M12 12m-10 0a10 10 0 1 0 20 0a10 10 0 1 0 -20 0"></path><path d="M6 12c.5 1.5 2 2.5 3.5 2.5s3-1 3.5-2.5"></path><path d="M11 12c.5 1.5 2 2.5 3.5 2.5s3-1 3.5-2.5"></path></svg>
+      <span>Enter VR</span>
+    `;
+    
+    // Premium glassmorphism styles
+    Object.assign(this.vrButton.style, {
+      position: 'absolute',
+      bottom: '20px',
+      right: '20px',
+      padding: '10px 16px',
+      borderRadius: '8px',
+      background: 'rgba(255, 255, 255, 0.15)',
+      backdropFilter: 'blur(12px)',
+      border: '1px solid rgba(255, 255, 255, 0.3)',
+      color: 'white',
+      fontFamily: 'system-ui, sans-serif',
+      fontSize: '14px',
+      fontWeight: '600',
+      cursor: 'pointer',
+      display: 'flex',
+      alignItems: 'center',
+      zIndex: '10',
+      transition: 'background-color 0.2s, transform 0.2s',
+      boxShadow: '0 4px 12px rgba(0,0,0,0.25)',
+    });
+
+    this.vrButton.addEventListener('mouseenter', () => {
+      if (this.vrButton) {
+        this.vrButton.style.background = 'rgba(255, 255, 255, 0.25)';
+        this.vrButton.style.transform = 'translateY(-1px)';
+      }
+    });
+
+    this.vrButton.addEventListener('mouseleave', () => {
+      if (this.vrButton) {
+        this.vrButton.style.background = 'rgba(255, 255, 255, 0.15)';
+        this.vrButton.style.transform = 'translateY(0)';
+      }
+    });
+
+    this.vrButton.addEventListener('click', () => this.toggleVR());
+    
+    this.container.appendChild(this.vrButton);
+  }
+
+  private toggleVR(): void {
+    if (!this.xrSession) {
+      navigator.xr?.requestSession('immersive-vr').then((session) => {
+        this.xrSession = session;
+        this.renderer.xr.setSession(session);
+        
+        if (this.vrButton) {
+          this.vrButton.querySelector('span')!.textContent = 'Exit VR';
+        }
+        
+        const onSessionEnd = () => {
+          this.xrSession = null;
+          if (this.vrButton) {
+            this.vrButton.querySelector('span')!.textContent = 'Enter VR';
+          }
+          session.removeEventListener('end', onSessionEnd);
+        };
+        session.addEventListener('end', onSessionEnd);
+      }).catch((err) => {
+        console.error('Failed to start WebXR session:', err);
+        this.emit('error', err instanceof Error ? err : new Error(String(err)));
+      });
+    } else {
+      this.xrSession.end();
+    }
+  }
+
   private loadTexture(url: string): void {
     const loader = new THREE.TextureLoader();
     loader.setCrossOrigin('anonymous');
@@ -272,10 +392,13 @@ export class Image360Player {
           this.material.needsUpdate = true;
           this.triggerRedraw();
         }
+        this.emit('load', undefined);
       },
       undefined,
       (err) => {
         console.error('Failed to load panorama image texture', err);
+        const errorObj = err instanceof Error ? err : new Error('Failed to load texture');
+        this.emit('error', errorObj);
       }
     );
   }
@@ -290,6 +413,7 @@ export class Image360Player {
       500 * Math.sin(phi) * Math.sin(theta)
     );
     this.camera.lookAt(target);
+    this.emit('viewchange', { yaw: this.getYaw(), pitch: this.pitch, hfov: this.hfov });
   }
 
   private updateCameraFov(): void {
@@ -302,6 +426,8 @@ export class Image360Player {
     const vfovRad = 2 * Math.atan(Math.tan(hfovRad / 2) / aspect);
     this.camera.fov = THREE.MathUtils.radToDeg(vfovRad);
     this.camera.updateProjectionMatrix();
+    this.emit('zoom', { hfov: this.hfov });
+    this.emit('viewchange', { yaw: this.getYaw(), pitch: this.pitch, hfov: this.hfov });
   }
 
   private updateHotspots(): void {
@@ -355,7 +481,32 @@ export class Image360Player {
 
   private animate = (): void => {
     if (!this.renderer) return;
-    requestAnimationFrame(this.animate);
+
+    const now = Date.now();
+    const dt = Math.min(50, now - this.lastFrameTime);
+    this.lastFrameTime = now;
+
+    if (this.isInertialGliding) {
+      const friction = Math.pow(0.92, dt / 16.6);
+      
+      this.yaw += this.velocityYaw * dt;
+      this.pitch += this.velocityPitch * dt;
+      this.pitch = Math.max(-85, Math.min(85, this.pitch));
+
+      this.velocityYaw *= friction;
+      this.velocityPitch *= friction;
+
+      this.updateCameraRotation();
+      this.updateHotspots();
+
+      const speed = Math.sqrt(this.velocityYaw * this.velocityYaw + this.velocityPitch * this.velocityPitch);
+      if (speed < 0.005) {
+        this.isInertialGliding = false;
+        this.velocityYaw = 0;
+        this.velocityPitch = 0;
+      }
+    }
+
     this.renderer.render(this.scene, this.camera);
   };
 
@@ -367,12 +518,23 @@ export class Image360Player {
     
     this.activePointers.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
 
+    this.velocityYaw = 0;
+    this.velocityPitch = 0;
+    this.isInertialGliding = false;
+    this.lastPointerTime = Date.now();
+    this.lastPointerX = e.clientX;
+    this.lastPointerY = e.clientY;
+
     if (this.activePointers.size === 1) {
       this.isDragging = true;
       this.dragStartX = e.clientX;
       this.dragStartY = e.clientY;
       this.dragStartYaw = this.yaw;
       this.dragStartPitch = this.pitch;
+
+      this.clickStartX = e.clientX;
+      this.clickStartY = e.clientY;
+      this.clickStartTime = Date.now();
     } else if (this.activePointers.size === 2 && this.options.touchPanAndZoom !== false) {
       this.isDragging = false;
       const pointers = Array.from(this.activePointers.values());
@@ -386,6 +548,9 @@ export class Image360Player {
   private onPointerMove = (e: PointerEvent): void => {
     if (!this.activePointers.has(e.pointerId)) return;
     
+    const now = Date.now();
+    const dt = Math.max(1, now - this.lastPointerTime);
+    
     this.activePointers.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
 
     if (this.isDragging && this.activePointers.size === 1) {
@@ -394,9 +559,14 @@ export class Image360Player {
       
       const sensitivity = this.hfov / 600; // Adjust speed based on FOV
       
-      this.yaw = this.dragStartYaw - deltaX * sensitivity;
-      this.pitch = this.dragStartPitch + deltaY * sensitivity;
-      this.pitch = Math.max(-85, Math.min(85, this.pitch));
+      const targetYaw = this.dragStartYaw - deltaX * sensitivity;
+      const targetPitch = Math.max(-85, Math.min(85, this.dragStartPitch + deltaY * sensitivity));
+      
+      this.velocityYaw = (targetYaw - this.yaw) / dt;
+      this.velocityPitch = (targetPitch - this.pitch) / dt;
+
+      this.yaw = targetYaw;
+      this.pitch = targetPitch;
       
       this.updateCameraRotation();
       this.updateHotspots();
@@ -413,14 +583,58 @@ export class Image360Player {
       this.updateCameraFov();
       this.updateHotspots();
     }
+
+    this.lastPointerTime = now;
+    this.lastPointerX = e.clientX;
+    this.lastPointerY = e.clientY;
   };
 
   private onPointerUp = (e: PointerEvent): void => {
     this.activePointers.delete(e.pointerId);
     
     if (this.activePointers.size === 0) {
+      // Trigger click event if within thresholds
+      const clickDuration = Date.now() - this.clickStartTime;
+      const dx = e.clientX - this.clickStartX;
+      const dy = e.clientY - this.clickStartY;
+      const clickDist = Math.sqrt(dx * dx + dy * dy);
+
+      if (this.isDragging && clickDuration < 250 && clickDist < 5) {
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+        const width = this.container.clientWidth || 800;
+        const height = this.container.clientHeight || 600;
+        const rect = this.container.getBoundingClientRect();
+
+        mouse.x = ((e.clientX - rect.left) / width) * 2 - 1;
+        mouse.y = -((e.clientY - rect.top) / height) * 2 + 1;
+
+        raycaster.setFromCamera(mouse, this.camera);
+        const intersects = raycaster.intersectObject(this.mesh);
+
+        if (intersects.length > 0) {
+          const point = intersects[0].point.clone().normalize();
+          const phi = Math.acos(point.y);
+          const pitch = 90 - THREE.MathUtils.radToDeg(phi);
+          let yaw = THREE.MathUtils.radToDeg(Math.atan2(point.z, point.x));
+          let normYaw = yaw % 360;
+          if (normYaw > 180) normYaw -= 360;
+          if (normYaw < -180) normYaw += 360;
+
+          this.emit('click', { yaw: normYaw, pitch, event: e });
+        } else {
+          this.emit('click', { yaw: this.getYaw(), pitch: this.pitch, event: e });
+        }
+      }
+
       this.isDragging = false;
       this.initialPinchDistance = null;
+
+      // Start inertia glide phase
+      const speed = Math.sqrt(this.velocityYaw * this.velocityYaw + this.velocityPitch * this.velocityPitch);
+      if (speed > 0.05) {
+        this.isInertialGliding = true;
+      }
     } else if (this.activePointers.size === 1) {
       // Re-initialize dragging for the single remaining pointer
       const remainingPointerId = Array.from(this.activePointers.keys())[0];
@@ -451,6 +665,26 @@ export class Image360Player {
     this.updateCameraFov();
     this.updateHotspots();
   };
+
+  // --- Event Emitter ---
+
+  public on<K extends PlayerEvent>(event: K, callback: (data: PlayerEventMap[K]) => void): void {
+    if (!this.listeners[event]) {
+      this.listeners[event] = [];
+    }
+    this.listeners[event]!.push(callback);
+  }
+
+  public off<K extends PlayerEvent>(event: K, callback: (data: PlayerEventMap[K]) => void): void {
+    if (!this.listeners[event]) return;
+    this.listeners[event] = this.listeners[event]!.filter(cb => cb !== callback);
+  }
+
+  private emit<K extends PlayerEvent>(event: K, data: PlayerEventMap[K]): void {
+    if (this.listeners[event]) {
+      this.listeners[event]!.forEach(cb => cb(data));
+    }
+  }
 
   // --- Public API ---
 
@@ -483,14 +717,58 @@ export class Image360Player {
     
     const element = document.createElement('div');
     element.className = 'custom-html-hotspot';
+    if (options.cssClass) {
+      element.className += ` ${options.cssClass}`;
+    }
     element.style.position = 'absolute';
     element.style.pointerEvents = 'auto';
     element.style.transform = 'translate(-50%, -50%)';
-    element.style.cursor = options.onClick ? 'pointer' : 'default';
-    element.innerHTML = options.html;
+    element.style.cursor = (options.onClick || options.url) ? 'pointer' : 'default';
+    
+    if (options.html) {
+      element.innerHTML = options.html;
+    } else {
+      // Default premium hotspot style (info marker with dynamic tooltip)
+      element.innerHTML = `
+        <div class="default-hotspot-marker" style="width: 28px; height: 28px; border-radius: 50%; background: rgba(255, 255, 255, 0.25); backdrop-filter: blur(8px); border: 2px solid rgba(255, 255, 255, 0.85); box-shadow: 0 4px 12px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-family: system-ui, sans-serif; font-size: 14px; user-select: none; transition: transform 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);">
+          i
+        </div>
+        ${options.text ? `
+          <div class="default-hotspot-tooltip" style="position: absolute; bottom: 34px; left: 50%; transform: translateX(-50%) translateY(4px); background: rgba(18, 18, 18, 0.85); backdrop-filter: blur(12px); color: white; font-family: system-ui, sans-serif; font-size: 12px; padding: 6px 10px; border-radius: 6px; white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity 0.2s, transform 0.2s; box-shadow: 0 4px 12px rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.1);">
+            ${options.text}
+          </div>
+        ` : ''}
+      `;
+      
+      // Hover animations for default hotspot
+      element.addEventListener('mouseenter', () => {
+        const marker = element.querySelector('.default-hotspot-marker') as HTMLElement;
+        const tooltip = element.querySelector('.default-hotspot-tooltip') as HTMLElement;
+        if (marker) marker.style.transform = 'scale(1.15)';
+        if (tooltip) {
+          tooltip.style.opacity = '1';
+          tooltip.style.transform = 'translateX(-50%) translateY(0px)';
+        }
+      });
+      element.addEventListener('mouseleave', () => {
+        const marker = element.querySelector('.default-hotspot-marker') as HTMLElement;
+        const tooltip = element.querySelector('.default-hotspot-tooltip') as HTMLElement;
+        if (marker) marker.style.transform = 'scale(1)';
+        if (tooltip) {
+          tooltip.style.opacity = '0';
+          tooltip.style.transform = 'translateX(-50%) translateY(4px)';
+        }
+      });
+    }
     
     if (options.onClick) {
       element.addEventListener('click', options.onClick);
+    }
+    
+    if (options.url) {
+      element.addEventListener('click', () => {
+        window.open(options.url, options.target || '_blank');
+      });
     }
     
     // Stop propagation of pointer events to prevent panning when dragging/clicking on hotspots
@@ -550,6 +828,10 @@ export class Image360Player {
   }
 
   public destroy(): void {
+    if (this.renderer) {
+      this.renderer.setAnimationLoop(null);
+    }
+
     if (this.resizeObserver) {
       this.resizeObserver.disconnect();
     } else {
@@ -571,7 +853,7 @@ export class Image360Player {
   }
 
   private triggerRedraw(): void {
-    // With requestAnimationFrame loop running continuously, redraw is implicit.
+    // With requestAnimationFrame / setAnimationLoop loop running continuously, redraw is implicit.
   }
 
   private checkWebGLSupport(): boolean {

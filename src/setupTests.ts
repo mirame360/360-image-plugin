@@ -4,6 +4,21 @@ import * as THREE from 'three';
 
 (window as any).WebGLRenderingContext = {};
 
+if (typeof window !== 'undefined') {
+  Object.defineProperty(window.navigator, 'xr', {
+    value: {
+      isSessionSupported: vi.fn().mockResolvedValue(false),
+      requestSession: vi.fn().mockResolvedValue({
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        end: vi.fn().mockResolvedValue(undefined),
+      }),
+    },
+    writable: true,
+    configurable: true,
+  });
+}
+
 HTMLCanvasElement.prototype.getContext = vi.fn().mockImplementation((contextType: string) => {
   if (contextType === 'webgl' || contextType === 'experimental-webgl') {
     return {};
@@ -29,6 +44,12 @@ vi.mock('three', async (importOriginal) => {
     this.render = vi.fn();
     this.dispose = vi.fn();
     this.setPixelRatio = vi.fn();
+    this.setAnimationLoop = vi.fn();
+    this.xr = {
+      enabled: false,
+      setSession: vi.fn(),
+      getSession: vi.fn().mockReturnValue(null),
+    };
     return this;
   });
 
