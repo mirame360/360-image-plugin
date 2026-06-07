@@ -197,6 +197,66 @@ describe('Image360Player', () => {
     expect(loadCallback).not.toHaveBeenCalled();
   });
 
+  it('should enable XR on the renderer and create a VR button if WebXR is supported', async () => {
+    vi.mocked(navigator.xr!.isSessionSupported).mockResolvedValue(true);
+
+    const player = new Image360Player({
+      container,
+      imageUrl: 'test.jpg'
+    });
+
+    // Allow promise resolution for isSessionSupported
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(navigator.xr!.isSessionSupported).toHaveBeenCalledWith('immersive-vr');
+    const vrButton = container.querySelector('.webxr-vr-button');
+    expect(vrButton).toBeInTheDocument();
+    expect(vrButton?.textContent?.trim()).toBe('Enter VR');
+
+    vi.mocked(navigator.xr!.isSessionSupported).mockResolvedValue(false);
+  });
+
+  it('should update velocity and trigger inertial glide on pointer release', () => {
+    const player = new Image360Player({
+      container,
+      imageUrl: 'test.jpg'
+    });
+
+    const canvas = container.querySelector('canvas')!;
+
+    // Simulate drag interaction
+    canvas.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, clientX: 100, clientY: 100 }));
+    canvas.dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, clientX: 150, clientY: 100 }));
+    canvas.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, clientX: 150, clientY: 100 }));
+
+    expect((player as any).isInertialGliding).toBe(true);
+    expect((player as any).velocityYaw).not.toBe(0);
+  });
+
+  it('should emit click event with raycast coordinates on click', () => {
+    const player = new Image360Player({
+      container,
+      imageUrl: 'test.jpg'
+    });
+
+    const clickCallback = vi.fn();
+    player.on('click', clickCallback);
+
+    const canvas = container.querySelector('canvas')!;
+
+    // Simulate pointer click (pointerdown and pointerup at same location quickly)
+    canvas.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, clientX: 100, clientY: 100 }));
+    canvas.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, clientX: 100, clientY: 100 }));
+
+    expect(clickCallback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        yaw: expect.any(Number),
+        pitch: expect.any(Number),
+        event: expect.any(PointerEvent)
+      })
+    );
+  });
+
   it('should clean up and dispose Three.js objects on destroy', () => {
     const player = new Image360Player({
       container,
