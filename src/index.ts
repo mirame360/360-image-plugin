@@ -457,7 +457,7 @@ export class Image360Player {
       if (dot < 0 || vector.z > 1) {
         hs.element.style.display = 'none';
       } else {
-        hs.element.style.display = 'block';
+        hs.element.style.display = '';
         
         const x = (vector.x * 0.5 + 0.5) * width;
         const y = (-(vector.y * 0.5) + 0.5) * height;
