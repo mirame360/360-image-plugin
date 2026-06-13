@@ -12,7 +12,6 @@ export default defineConfig({
       fileName: () => '360-image-player.standalone.umd.min.js',
       formats: ['umd'],
     },
-    minify: 'esbuild',
     sourcemap: false,
     rollupOptions: {
       external: ['react', 'react-dom'],

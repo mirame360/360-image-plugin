@@ -1,5 +1,13 @@
 import React, { useEffect, useRef, useState, forwardRef } from 'react';
-import { Image360Player, Image360PlayerOptions, HotSpotOptions } from '../index';
+import {
+  BrandingMode,
+  GameState,
+  Image360Player,
+  Image360PlayerOptions,
+  HotSpotOptions,
+  NadirCoverOptions,
+  PlayerEventMap,
+} from '../index';
 
 export interface ReactImage360PlayerProps extends Omit<Image360PlayerOptions, 'container'> {
   className?: string;
@@ -11,6 +19,13 @@ export interface ReactImage360PlayerProps extends Omit<Image360PlayerOptions, 'c
   onError?: (error: Error) => void;
   onClick?: (data: { yaw: number; pitch: number; event: PointerEvent }) => void;
   onHotspotClick?: (data: HotSpotOptions) => void;
+  onQuizAnswer?: (data: PlayerEventMap['quizanswer']) => void;
+  onClueDiscovered?: (data: PlayerEventMap['cluediscovered']) => void;
+  onUnlock?: (data: PlayerEventMap['unlock']) => void;
+  onAddToCart?: (data: PlayerEventMap['addtocart']) => void;
+  onSnapshotStart?: (data: PlayerEventMap['snapshotstart']) => void;
+  onSnapshotComplete?: (data: PlayerEventMap['snapshotcomplete']) => void;
+  gameState?: Partial<GameState>;
 }
 
 export const ReactImage360Player = forwardRef<Image360Player | null, ReactImage360PlayerProps>(
@@ -26,6 +41,13 @@ export const ReactImage360Player = forwardRef<Image360Player | null, ReactImage3
       doubleClickZoom,
       touchPanAndZoom,
       colorFilters,
+      initialView,
+      nadir,
+      brandingMode,
+      allowExternalLinks,
+      sanitizeHTML,
+      snapshotEndpoint,
+      snapshotHeaders,
       hotspots,
       onLoad,
       onViewChange,
@@ -33,12 +55,23 @@ export const ReactImage360Player = forwardRef<Image360Player | null, ReactImage3
       onError,
       onClick,
       onHotspotClick,
+      onQuizAnswer,
+      onClueDiscovered,
+      onUnlock,
+      onAddToCart,
+      onSnapshotStart,
+      onSnapshotComplete,
+      gameState,
     },
     ref
   ) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const [player, setPlayer] = useState<Image360Player | null>(null);
     const activeHotspotIdsRef = useRef<string[]>([]);
+    const appliedImageUrlRef = useRef(imageUrl);
+    const appliedColorFiltersRef = useRef(colorFilters);
+    const appliedNadirRef = useRef(nadir);
+    const appliedBrandingModeRef = useRef(brandingMode);
 
     useEffect(() => {
       if (!containerRef.current) return;
@@ -52,9 +85,21 @@ export const ReactImage360Player = forwardRef<Image360Player | null, ReactImage3
         mouseZoom,
         doubleClickZoom,
         touchPanAndZoom,
+        colorFilters,
+        initialView,
+        nadir,
+        brandingMode,
+        allowExternalLinks,
+        sanitizeHTML,
+        snapshotEndpoint,
+        snapshotHeaders,
       });
 
       setPlayer(newPlayer);
+      appliedImageUrlRef.current = imageUrl;
+      appliedColorFiltersRef.current = colorFilters;
+      appliedNadirRef.current = nadir;
+      appliedBrandingModeRef.current = brandingMode;
       if (ref) {
         if (typeof ref === 'function') {
           ref(newPlayer);
@@ -74,19 +119,51 @@ export const ReactImage360Player = forwardRef<Image360Player | null, ReactImage3
           }
         }
       };
-    }, [autoLoad, showControls, compass, mouseZoom, doubleClickZoom, touchPanAndZoom]);
+    }, [
+      autoLoad,
+      showControls,
+      compass,
+      mouseZoom,
+      doubleClickZoom,
+      touchPanAndZoom,
+      initialView,
+      allowExternalLinks,
+      sanitizeHTML,
+      snapshotEndpoint,
+      snapshotHeaders,
+    ]);
 
     useEffect(() => {
-      if (player && imageUrl) {
+      if (player && imageUrl !== appliedImageUrlRef.current) {
         player.setImageUrl(imageUrl);
+        appliedImageUrlRef.current = imageUrl;
       }
     }, [player, imageUrl]);
 
     useEffect(() => {
-      if (player && colorFilters) {
+      if (player && colorFilters && colorFilters !== appliedColorFiltersRef.current) {
         player.setColorFilters(colorFilters);
+        appliedColorFiltersRef.current = colorFilters;
       }
     }, [player, colorFilters]);
+
+    useEffect(() => {
+      if (player && nadir !== appliedNadirRef.current) {
+        player.setNadirCover(nadir as NadirCoverOptions | undefined);
+        appliedNadirRef.current = nadir;
+      }
+    }, [player, nadir]);
+
+    useEffect(() => {
+      if (player && brandingMode !== appliedBrandingModeRef.current) {
+        player.setBrandingMode((brandingMode || 'branded') as BrandingMode);
+        appliedBrandingModeRef.current = brandingMode;
+      }
+    }, [player, brandingMode]);
+
+    useEffect(() => {
+      if (player && gameState) player.setGameState(gameState);
+    }, [player, gameState]);
 
     useEffect(() => {
       if (!player) return;
@@ -117,6 +194,12 @@ export const ReactImage360Player = forwardRef<Image360Player | null, ReactImage3
       const handleError = (err: any) => onError?.(err);
       const handleClick = (data: any) => onClick?.(data);
       const handleHotspotClick = (data: any) => onHotspotClick?.(data);
+      const handleQuizAnswer = (data: any) => onQuizAnswer?.(data);
+      const handleClueDiscovered = (data: any) => onClueDiscovered?.(data);
+      const handleUnlock = (data: any) => onUnlock?.(data);
+      const handleAddToCart = (data: any) => onAddToCart?.(data);
+      const handleSnapshotStart = (data: any) => onSnapshotStart?.(data);
+      const handleSnapshotComplete = (data: any) => onSnapshotComplete?.(data);
 
       player.on('load', handleLoad);
       player.on('viewchange', handleViewChange);
@@ -124,6 +207,12 @@ export const ReactImage360Player = forwardRef<Image360Player | null, ReactImage3
       player.on('error', handleError);
       player.on('click', handleClick);
       player.on('hotspotclick', handleHotspotClick);
+      player.on('quizanswer', handleQuizAnswer);
+      player.on('cluediscovered', handleClueDiscovered);
+      player.on('unlock', handleUnlock);
+      player.on('addtocart', handleAddToCart);
+      player.on('snapshotstart', handleSnapshotStart);
+      player.on('snapshotcomplete', handleSnapshotComplete);
 
       return () => {
         player.off('load', handleLoad);
@@ -132,8 +221,28 @@ export const ReactImage360Player = forwardRef<Image360Player | null, ReactImage3
         player.off('error', handleError);
         player.off('click', handleClick);
         player.off('hotspotclick', handleHotspotClick);
+        player.off('quizanswer', handleQuizAnswer);
+        player.off('cluediscovered', handleClueDiscovered);
+        player.off('unlock', handleUnlock);
+        player.off('addtocart', handleAddToCart);
+        player.off('snapshotstart', handleSnapshotStart);
+        player.off('snapshotcomplete', handleSnapshotComplete);
       };
-    }, [player, onLoad, onViewChange, onZoom, onError, onClick, onHotspotClick]);
+    }, [
+      player,
+      onLoad,
+      onViewChange,
+      onZoom,
+      onError,
+      onClick,
+      onHotspotClick,
+      onQuizAnswer,
+      onClueDiscovered,
+      onUnlock,
+      onAddToCart,
+      onSnapshotStart,
+      onSnapshotComplete,
+    ]);
 
     return (
       <div

@@ -94,6 +94,43 @@ document.addEventListener('DOMContentLoaded', () => {
     target: '_blank',
   });
 
+  player.addHTMLOverlay({
+    id: 'demo-quiz',
+    type: 'quiz',
+    yaw: 80,
+    pitch: 5,
+    title: 'Unlock the product hotspot?',
+    quizChoices: [
+      { id: 'no', label: 'Not yet' },
+      { id: 'yes', label: 'Unlock', correct: true },
+    ],
+    unlocks: ['demo-product'],
+    branded: false,
+  });
+
+  player.addHTMLOverlay({
+    id: 'demo-product',
+    type: 'product',
+    yaw: 100,
+    pitch: 0,
+    requires: ['demo-product'],
+    product: {
+      id: 'demo-chair',
+      title: 'Demo chair',
+      price: '$99',
+      vendor: 'custom',
+    },
+    branded: false,
+  });
+
+  player.on('quizanswer', ({ correct }) => {
+    logToConsole('quizanswer', correct ? 'Correct answer; product unlocked.' : 'Incorrect answer.');
+  });
+
+  player.on('addtocart', ({ product }) => {
+    logToConsole('addtocart', `Host cart callback for ${product.title}.`);
+  });
+
   const snapshotBtn = document.getElementById('btn-snapshot');
   if (snapshotBtn) {
     snapshotBtn.addEventListener('click', () => {
@@ -118,6 +155,37 @@ document.addEventListener('DOMContentLoaded', () => {
         alert('Failed to capture snapshot: ' + err.message);
         logToConsole('error', 'Snapshot failed: ' + err.message);
       });
+    });
+  }
+
+  const exportBtn = document.getElementById('btn-export');
+  if (exportBtn) {
+    exportBtn.addEventListener('click', async () => {
+      try {
+        const zip = await player.exportOffline({
+          playerScriptUrl: '../dist/360-image-player.standalone.umd.min.js',
+        });
+        const url = URL.createObjectURL(zip);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = '360-tour.zip';
+        link.click();
+        URL.revokeObjectURL(url);
+        logToConsole('export', 'Offline ZIP generated.');
+      } catch (error) {
+        logToConsole('error', error instanceof Error ? error.message : String(error));
+      }
+    });
+  }
+
+  const brandingBtn = document.getElementById('btn-branding');
+  if (brandingBtn) {
+    let unbranded = false;
+    brandingBtn.addEventListener('click', () => {
+      unbranded = !unbranded;
+      player.setBrandingMode(unbranded ? 'unbranded' : 'branded');
+      brandingBtn.textContent = unbranded ? 'Switch to Branded' : 'Switch to Unbranded';
+      logToConsole('branding', unbranded ? 'Unbranded mode enabled.' : 'Branded mode enabled.');
     });
   }
 

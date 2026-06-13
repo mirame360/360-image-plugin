@@ -1,9 +1,9 @@
 {
   "name": "360-image-player",
   "version": "0.1.0",
-  "description": "Framework-agnostic 360 image player based on Pannellum.",
+  "description": "Framework-agnostic Three.js player for equirectangular 360 images.",
   "type": "module",
-  "license": "MIT",
+  "license": "GPL-3.0-only",
   "sideEffects": false,
   "main": "./dist/360-image-player.min.cjs",
   "module": "./dist/360-image-player.min.js",
@@ -39,14 +39,16 @@
     "demo:build": "npm run build && vite build demo --outDir ../dist-demo --emptyOutDir --base ./",
     "lint": "eslint . --max-warnings 0",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test:unit": "vitest run --config vitest.config.ts"
+    "test:unit": "vitest run --config vitest.config.ts",
+    "test:coverage": "vitest run --config vitest.config.ts --coverage"
   },
   "keywords": [
     "360-image",
     "webgl",
     "panorama",
     "equirectangular",
-    "pannellum"
+    "three.js",
+    "virtual-tour"
   ],
   "peerDependencies": {
     "react": ">=16.8.0",
@@ -54,22 +56,25 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
     "@types/node": "^25.6.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@types/three": "^0.164.0",
+    "@vitest/coverage-v8": "^4.1.8",
     "eslint": "^10.2.1",
     "globals": "^17.5.0",
+    "jsdom": "^29.1.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
     "three": "^0.164.1",
     "typescript": "^5.4.5",
     "typescript-eslint": "^8.59.0",
-    "vite": "^7.3.2",
-    "vitest": "^4.1.5",
-    "@testing-library/react": "^16.3.2",
-    "@testing-library/jest-dom": "^6.9.1",
-    "jsdom": "^29.1.0"
+    "vite": "^8.0.16",
+    "vitest": "^4.1.5"
   },
-  "dependencies": {}
+  "dependencies": {
+    "fflate": "^0.8.3"
+  }
 }

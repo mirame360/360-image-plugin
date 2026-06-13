@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { strToU8, zipSync } from 'fflate';
 
 export interface WebGL360ColorFilters {
   exposure?: number;
@@ -21,17 +22,64 @@ export interface Image360PlayerOptions {
   doubleClickZoom?: boolean;
   touchPanAndZoom?: boolean;
   colorFilters?: WebGL360ColorFilters;
+  initialView?: Partial<Viewport>;
+  brandingMode?: BrandingMode;
+  allowExternalLinks?: boolean;
+  sanitizeHTML?: (html: string) => string;
+  nadir?: NadirCoverOptions;
+  snapshotEndpoint?: string;
+  snapshotHeaders?: Record<string, string>;
+}
+
+export interface Viewport {
+  yaw: number;
+  pitch: number;
+  hfov: number;
+}
+
+export type BrandingMode = 'branded' | 'unbranded';
+export type HotSpotType = 'info' | 'link' | 'quiz' | 'clue' | 'locked' | 'product';
+
+export interface NadirCoverOptions {
+  imageUrl: string;
+  radius?: number;
+  rotation?: number;
+  opacity?: number;
+}
+
+export interface QuizChoice {
+  id: string;
+  label: string;
+  correct?: boolean;
+}
+
+export interface ProductOptions {
+  id: string;
+  title: string;
+  price?: string;
+  imageUrl?: string;
+  variantId?: string;
+  vendor?: 'shopify' | 'prestashop' | 'custom';
+  metadata?: Record<string, unknown>;
 }
 
 export interface HotSpotOptions {
   yaw: number;
   pitch: number;
   id?: string;
+  type?: HotSpotType;
   html?: string;
   text?: string;
+  title?: string;
   url?: string;
   target?: string;
   cssClass?: string;
+  branded?: boolean;
+  quizChoices?: QuizChoice[];
+  clueId?: string;
+  unlocks?: string[];
+  requires?: string[];
+  product?: ProductOptions;
   onClick?: (e: Event) => void;
 }
 
@@ -40,7 +88,58 @@ interface ActiveHotSpot {
   element: HTMLDivElement;
 }
 
-export type PlayerEvent = 'load' | 'viewchange' | 'zoom' | 'error' | 'click' | 'hotspotclick';
+export interface SnapshotRequestOptions {
+  endpoint?: string;
+  mediaId?: string;
+  width?: number;
+  height?: number;
+  quality?: number;
+  format?: 'jpeg' | 'png' | 'webp';
+  headers?: Record<string, string>;
+  signal?: AbortSignal;
+}
+
+export interface OfflineExportOptions {
+  fileName?: string;
+  playerScriptUrl?: string;
+  fetchAssets?: boolean;
+}
+
+export interface SerializablePlayerConfig {
+  imageUrl: string;
+  autoLoad: boolean;
+  showControls: boolean;
+  compass: boolean;
+  mouseZoom: boolean;
+  doubleClickZoom: boolean;
+  touchPanAndZoom: boolean;
+  colorFilters: Required<WebGL360ColorFilters>;
+  initialView: Viewport;
+  brandingMode: BrandingMode;
+  allowExternalLinks: boolean;
+  nadir?: NadirCoverOptions;
+  hotspots: HotSpotOptions[];
+}
+
+export interface GameState {
+  discoveredClues: string[];
+  unlockedHotspots: string[];
+  answeredQuizzes: Record<string, string>;
+}
+
+export type PlayerEvent =
+  | 'load'
+  | 'viewchange'
+  | 'zoom'
+  | 'error'
+  | 'click'
+  | 'hotspotclick'
+  | 'quizanswer'
+  | 'cluediscovered'
+  | 'unlock'
+  | 'addtocart'
+  | 'snapshotstart'
+  | 'snapshotcomplete';
 
 export interface PlayerEventMap {
   'load': undefined;
@@ -49,6 +148,12 @@ export interface PlayerEventMap {
   'error': Error;
   'click': { yaw: number; pitch: number; event: PointerEvent };
   'hotspotclick': HotSpotOptions;
+  'quizanswer': { hotspot: HotSpotOptions; choice: QuizChoice; correct: boolean };
+  'cluediscovered': { hotspot: HotSpotOptions; clueId: string };
+  'unlock': { hotspotIds: string[] };
+  'addtocart': { hotspot: HotSpotOptions; product: ProductOptions };
+  'snapshotstart': { viewport: Viewport };
+  'snapshotcomplete': { viewport: Viewport; url?: string; blob?: Blob };
 }
 
 export class Image360Player {
@@ -63,8 +168,14 @@ export class Image360Player {
   private mesh!: THREE.Mesh;
   private resizeObserver?: ResizeObserver;
   private hotspotsOverlay!: HTMLDivElement;
+  private controlsOverlay?: HTMLDivElement;
+  private compassElement?: HTMLDivElement;
   private vrButton?: HTMLButtonElement;
   private xrSession: any = null;
+  private nadirMesh?: THREE.Mesh;
+  private nadirMaterial?: THREE.MeshBasicMaterial;
+  private nadirTexture?: THREE.Texture;
+  private isDestroyed = false;
   
   private yaw = 0;
   private pitch = 0;
@@ -81,6 +192,11 @@ export class Image360Player {
   private initialPinchHfov = 90;
   
   private hotspots: ActiveHotSpot[] = [];
+  private gameState: GameState = {
+    discoveredClues: [],
+    unlockedHotspots: [],
+    answeredQuizzes: {},
+  };
   
   private filters: Required<WebGL360ColorFilters> = {
     exposure: 0,
@@ -109,8 +225,21 @@ export class Image360Player {
   private clickStartTime = 0;
 
   constructor(options: Image360PlayerOptions) {
-    this.options = options;
+    this.options = {
+      ...options,
+      autoLoad: options.autoLoad !== false,
+      showControls: options.showControls !== false,
+      compass: options.compass === true,
+      mouseZoom: options.mouseZoom !== false,
+      doubleClickZoom: options.doubleClickZoom !== false,
+      touchPanAndZoom: options.touchPanAndZoom !== false,
+      brandingMode: options.brandingMode || 'branded',
+      allowExternalLinks: options.allowExternalLinks !== false,
+    };
     this.container = options.container;
+    this.yaw = options.initialView?.yaw ?? 0;
+    this.pitch = this.clampPitch(options.initialView?.pitch ?? 0);
+    this.hfov = this.clampHfov(options.initialView?.hfov ?? 90);
 
     if (options.colorFilters) {
       this.filters = { ...this.filters, ...options.colorFilters };
@@ -125,8 +254,14 @@ export class Image360Player {
     this.initDOM();
     this.initListeners();
     this.initXR();
-    
-    this.loadTexture(options.imageUrl);
+
+    if (this.options.nadir) {
+      this.setNadirCover(this.options.nadir);
+    }
+
+    if (this.options.autoLoad) {
+      this.loadTexture(options.imageUrl);
+    }
     
     // Trigger initial layout resize
     this.resize();
@@ -256,6 +391,88 @@ export class Image360Player {
     this.hotspotsOverlay.style.overflow = 'hidden';
     this.hotspotsOverlay.style.zIndex = '5';
     this.container.appendChild(this.hotspotsOverlay);
+
+    if (this.options.showControls) {
+      this.createControls();
+    }
+    if (this.options.compass) {
+      this.createCompass();
+    }
+  }
+
+  private createControls(): void {
+    const controls = document.createElement('div');
+    controls.className = 'image360-controls';
+    Object.assign(controls.style, {
+      position: 'absolute',
+      left: '16px',
+      bottom: '16px',
+      zIndex: '10',
+      display: 'flex',
+      gap: '8px',
+    });
+
+    const controlsConfig = [
+      { label: 'Zoom in', text: '+', action: () => this.setHfov(this.hfov - 10) },
+      { label: 'Zoom out', text: '−', action: () => this.setHfov(this.hfov + 10) },
+      { label: 'Reset view', text: '↺', action: () => this.setView({ yaw: 0, pitch: 0, hfov: 90 }) },
+    ];
+
+    controlsConfig.forEach(({ label, text, action }) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'image360-control-button';
+      button.setAttribute('aria-label', label);
+      button.textContent = text;
+      Object.assign(button.style, {
+        width: '36px',
+        height: '36px',
+        border: '1px solid rgba(255,255,255,0.35)',
+        borderRadius: '8px',
+        background: 'rgba(18,18,18,0.65)',
+        color: 'white',
+        cursor: 'pointer',
+        fontSize: '20px',
+      });
+      button.addEventListener('click', action);
+      controls.appendChild(button);
+    });
+
+    this.controlsOverlay = controls;
+    this.container.appendChild(controls);
+  }
+
+  private createCompass(): void {
+    const compass = document.createElement('div');
+    compass.className = 'image360-compass';
+    compass.setAttribute('aria-label', 'Panorama heading');
+    Object.assign(compass.style, {
+      position: 'absolute',
+      top: '16px',
+      right: '16px',
+      zIndex: '10',
+      width: '42px',
+      height: '42px',
+      borderRadius: '50%',
+      border: '1px solid rgba(255,255,255,0.45)',
+      background: 'rgba(18,18,18,0.65)',
+      color: 'white',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      font: '600 12px system-ui, sans-serif',
+      transformOrigin: 'center',
+    });
+    compass.textContent = 'N';
+    this.compassElement = compass;
+    this.container.appendChild(compass);
+    this.updateCompass();
+  }
+
+  private updateCompass(): void {
+    if (this.compassElement) {
+      this.compassElement.style.transform = `rotate(${-this.getYaw()}deg)`;
+    }
   }
 
   private initListeners(): void {
@@ -379,6 +596,10 @@ export class Image360Player {
     loader.load(
       url,
       (texture) => {
+        if (this.isDestroyed) {
+          texture.dispose();
+          return;
+        }
         texture.colorSpace = THREE.SRGBColorSpace;
         texture.minFilter = THREE.LinearFilter;
         texture.magFilter = THREE.LinearFilter;
@@ -414,6 +635,7 @@ export class Image360Player {
       500 * Math.sin(phi) * Math.sin(theta)
     );
     this.camera.lookAt(target);
+    this.updateCompass();
     this.emit('viewchange', { yaw: this.getYaw(), pitch: this.pitch, hfov: this.hfov });
   }
 
@@ -440,6 +662,10 @@ export class Image360Player {
     const cameraDir = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
 
     this.hotspots.forEach(hs => {
+      if (!this.isHotspotAvailable(hs.options)) {
+        hs.element.style.display = 'none';
+        return;
+      }
       // Calculate 3D position vector on sphere of radius 500
       const phi = THREE.MathUtils.degToRad(90 - hs.options.pitch);
       const theta = THREE.MathUtils.degToRad(hs.options.yaw);
@@ -617,7 +843,7 @@ export class Image360Player {
           const point = intersects[0].point.clone().normalize();
           const phi = Math.acos(point.y);
           const pitch = 90 - THREE.MathUtils.radToDeg(phi);
-          let yaw = THREE.MathUtils.radToDeg(Math.atan2(point.z, point.x));
+          const yaw = THREE.MathUtils.radToDeg(Math.atan2(point.z, point.x));
           let normYaw = yaw % 360;
           if (normYaw > 180) normYaw -= 360;
           if (normYaw < -180) normYaw += 360;
@@ -689,10 +915,123 @@ export class Image360Player {
 
   // --- Public API ---
 
+  private clampPitch(value: number): number {
+    return Math.max(-85, Math.min(85, value));
+  }
+
+  private clampHfov(value: number): number {
+    return Math.max(30, Math.min(120, value));
+  }
+
+  private sanitizeHTML(html: string): string {
+    if (this.options.sanitizeHTML) {
+      return this.options.sanitizeHTML(html);
+    }
+    const template = document.createElement('template');
+    template.innerHTML = html;
+    template.content.querySelectorAll('script, iframe, object, embed, link, meta').forEach(node => node.remove());
+    template.content.querySelectorAll('*').forEach(node => {
+      Array.from(node.attributes).forEach(attribute => {
+        const name = attribute.name.toLowerCase();
+        const value = attribute.value.trim().toLowerCase();
+        if (name.startsWith('on') || (['href', 'src', 'xlink:href'].includes(name) && value.startsWith('javascript:'))) {
+          node.removeAttribute(attribute.name);
+        }
+      });
+    });
+    return template.innerHTML;
+  }
+
+  private isHotspotAvailable(options: HotSpotOptions): boolean {
+    if (this.options.brandingMode === 'unbranded' && options.branded !== false) {
+      return false;
+    }
+    const requirements = options.requires || [];
+    return requirements.every(id =>
+      this.gameState.discoveredClues.includes(id) || this.gameState.unlockedHotspots.includes(id)
+    );
+  }
+
+  public load(): void {
+    this.loadTexture(this.options.imageUrl);
+  }
+
   public setImageUrl(url: string): void {
     if (this.options.imageUrl === url) return;
     this.options.imageUrl = url;
     this.loadTexture(url);
+  }
+
+  public getView(): Viewport {
+    return { yaw: this.getYaw(), pitch: this.pitch, hfov: this.hfov };
+  }
+
+  public setView(view: Partial<Viewport>): void {
+    if (view.yaw !== undefined) this.yaw = view.yaw;
+    if (view.pitch !== undefined) this.pitch = this.clampPitch(view.pitch);
+    if (view.hfov !== undefined) this.hfov = this.clampHfov(view.hfov);
+    this.updateCameraRotation();
+    this.updateCameraFov();
+    this.updateHotspots();
+  }
+
+  public setYaw(yaw: number): void {
+    this.setView({ yaw });
+  }
+
+  public setPitch(pitch: number): void {
+    this.setView({ pitch });
+  }
+
+  public setHfov(hfov: number): void {
+    this.setView({ hfov });
+  }
+
+  public setBrandingMode(mode: BrandingMode): void {
+    this.options.brandingMode = mode;
+    this.hotspots.forEach(hotspot => {
+      hotspot.element.style.display = this.isHotspotAvailable(hotspot.options) ? '' : 'none';
+    });
+    this.updateHotspots();
+  }
+
+  public setNadirCover(options?: NadirCoverOptions): void {
+    if (this.nadirMesh) {
+      this.scene.remove(this.nadirMesh);
+      this.nadirMesh.geometry.dispose();
+      this.nadirMaterial?.dispose();
+      this.nadirTexture?.dispose();
+      this.nadirMesh = undefined;
+      this.nadirMaterial = undefined;
+      this.nadirTexture = undefined;
+    }
+    this.options.nadir = options;
+    if (!options || !this.scene) return;
+
+    new THREE.TextureLoader().load(options.imageUrl, texture => {
+      if (this.isDestroyed || this.options.nadir !== options) {
+        texture.dispose();
+        return;
+      }
+      texture.colorSpace = THREE.SRGBColorSpace;
+      const radius = Math.max(5, Math.min(200, options.radius ?? 55));
+      const geometry = new THREE.CircleGeometry(radius, 64);
+      const material = new THREE.MeshBasicMaterial({
+        map: texture,
+        transparent: true,
+        opacity: Math.max(0, Math.min(1, options.opacity ?? 1)),
+        side: THREE.DoubleSide,
+        depthTest: true,
+      });
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.position.set(0, -490, 0);
+      mesh.rotation.x = Math.PI / 2;
+      mesh.rotation.z = THREE.MathUtils.degToRad(options.rotation ?? 0);
+      this.nadirTexture = texture;
+      this.nadirMaterial = material;
+      this.nadirMesh = mesh;
+      this.scene.add(mesh);
+    });
   }
 
   public setColorFilters(filters: WebGL360ColorFilters): void {
@@ -732,7 +1071,7 @@ export class Image360Player {
     element.style.cursor = (options.onClick || options.url) ? 'pointer' : 'default';
     
     if (options.html) {
-      element.innerHTML = options.html;
+      element.innerHTML = this.sanitizeHTML(options.html);
     } else {
       // Default premium hotspot style (info marker with dynamic tooltip)
       element.innerHTML = `
@@ -741,10 +1080,64 @@ export class Image360Player {
         </div>
         ${options.text ? `
           <div class="default-hotspot-tooltip" style="position: absolute; bottom: 34px; left: 50%; transform: translateX(-50%) translateY(4px); background: rgba(18, 18, 18, 0.85); backdrop-filter: blur(12px); color: white; font-family: system-ui, sans-serif; font-size: 12px; padding: 6px 10px; border-radius: 6px; white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity 0.2s, transform 0.2s; box-shadow: 0 4px 12px rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.1);">
-            ${options.text}
           </div>
         ` : ''}
       `;
+      const tooltip = element.querySelector('.default-hotspot-tooltip');
+      if (tooltip) tooltip.textContent = options.text || '';
+      const marker = element.querySelector('.default-hotspot-marker');
+      if (marker && options.type === 'locked') marker.textContent = 'L';
+      if (marker && options.type === 'product') marker.textContent = '$';
+      if (marker && options.type === 'quiz') marker.textContent = '?';
+
+      if (tooltip && options.type === 'product' && options.product) {
+        tooltip.textContent = '';
+        const product = options.product;
+        if (product.imageUrl) {
+          const image = document.createElement('img');
+          image.src = product.imageUrl;
+          image.alt = '';
+          Object.assign(image.style, {
+            display: 'block',
+            width: '160px',
+            maxHeight: '100px',
+            objectFit: 'cover',
+            borderRadius: '4px',
+            marginBottom: '6px',
+          });
+          tooltip.appendChild(image);
+        }
+        const title = document.createElement('strong');
+        title.textContent = product.title;
+        tooltip.appendChild(title);
+        if (product.price) {
+          const price = document.createElement('div');
+          price.textContent = product.price;
+          tooltip.appendChild(price);
+        }
+      }
+
+      if (tooltip && options.type === 'quiz' && options.quizChoices?.length) {
+        tooltip.textContent = '';
+        if (options.title || options.text) {
+          const question = document.createElement('strong');
+          question.textContent = options.title || options.text || '';
+          tooltip.appendChild(question);
+        }
+        options.quizChoices.forEach(choice => {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.textContent = choice.label;
+          button.style.display = 'block';
+          button.style.marginTop = '6px';
+          button.addEventListener('click', event => {
+            event.stopPropagation();
+            this.answerQuiz(id, choice.id);
+          });
+          tooltip.appendChild(button);
+        });
+        (tooltip as HTMLElement).style.pointerEvents = 'auto';
+      }
       
       // Hover animations for default hotspot
       element.addEventListener('mouseenter', () => {
@@ -773,13 +1166,22 @@ export class Image360Player {
     
     if (options.url) {
       element.addEventListener('click', () => {
-        window.open(options.url, options.target || '_blank');
+        if (!this.options.allowExternalLinks || this.options.brandingMode === 'unbranded') return;
+        const opened = window.open(options.url, options.target || '_blank');
+        if (opened) opened.opener = null;
       });
     }
 
     // Emit global hotspotclick event when clicked
     element.addEventListener('click', () => {
-      this.emit('hotspotclick', { ...options, id });
+      const hotspot = { ...options, id };
+      if (hotspot.type === 'clue' && hotspot.clueId) {
+        this.discoverClue(hotspot.clueId, hotspot);
+      }
+      if (hotspot.type === 'product' && hotspot.product) {
+        this.emit('addtocart', { hotspot, product: hotspot.product });
+      }
+      this.emit('hotspotclick', hotspot);
     });
     
     // Stop propagation of pointer events to prevent panning when dragging/clicking on hotspots
@@ -793,6 +1195,9 @@ export class Image360Player {
       element,
     });
 
+    if (!this.isHotspotAvailable({ ...options, id })) {
+      element.style.display = 'none';
+    }
     this.updateHotspots();
   }
 
@@ -803,6 +1208,52 @@ export class Image360Player {
       this.hotspotsOverlay.removeChild(hs.element);
       this.hotspots.splice(index, 1);
     }
+  }
+
+  public answerQuiz(hotspotId: string, choiceId: string): boolean {
+    const active = this.hotspots.find(item => item.options.id === hotspotId);
+    const choice = active?.options.quizChoices?.find(item => item.id === choiceId);
+    if (!active || !choice) return false;
+    const correct = choice.correct === true;
+    this.gameState.answeredQuizzes[hotspotId] = choiceId;
+    this.emit('quizanswer', { hotspot: active.options, choice, correct });
+    if (correct && active.options.unlocks?.length) {
+      this.unlockHotspots(active.options.unlocks);
+    }
+    return correct;
+  }
+
+  public discoverClue(clueId: string, hotspot?: HotSpotOptions): void {
+    if (this.gameState.discoveredClues.includes(clueId)) return;
+    this.gameState.discoveredClues.push(clueId);
+    if (hotspot) this.emit('cluediscovered', { hotspot, clueId });
+    if (hotspot?.unlocks?.length) this.unlockHotspots(hotspot.unlocks);
+    this.updateHotspots();
+  }
+
+  public unlockHotspots(ids: string[]): void {
+    const unlocked = ids.filter(id => !this.gameState.unlockedHotspots.includes(id));
+    if (!unlocked.length) return;
+    this.gameState.unlockedHotspots.push(...unlocked);
+    this.emit('unlock', { hotspotIds: unlocked });
+    this.updateHotspots();
+  }
+
+  public getGameState(): GameState {
+    return {
+      discoveredClues: [...this.gameState.discoveredClues],
+      unlockedHotspots: [...this.gameState.unlockedHotspots],
+      answeredQuizzes: { ...this.gameState.answeredQuizzes },
+    };
+  }
+
+  public setGameState(state: Partial<GameState>): void {
+    this.gameState = {
+      discoveredClues: [...(state.discoveredClues || [])],
+      unlockedHotspots: [...(state.unlockedHotspots || [])],
+      answeredQuizzes: { ...(state.answeredQuizzes || {}) },
+    };
+    this.updateHotspots();
   }
 
   public getYaw(): number {
@@ -838,9 +1289,177 @@ export class Image360Player {
     });
   }
 
+  public async requestSnapshot(options: SnapshotRequestOptions = {}): Promise<{ blob?: Blob; url?: string }> {
+    const endpoint = options.endpoint || this.options.snapshotEndpoint;
+    if (!endpoint) throw new Error('A snapshot endpoint is required');
+    const viewport = this.getView();
+    this.emit('snapshotstart', { viewport });
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...this.options.snapshotHeaders,
+        ...options.headers,
+      },
+      body: JSON.stringify({
+        media_id: options.mediaId,
+        ...viewport,
+        width: options.width ?? 3840,
+        height: options.height ?? 2160,
+        quality: options.quality ?? 0.92,
+        format: options.format ?? 'jpeg',
+      }),
+      signal: options.signal,
+    });
+    if (!response.ok) {
+      let detail = `Snapshot request failed (${response.status})`;
+      try {
+        const payload = await response.json();
+        detail = payload.detail || detail;
+      } catch {
+        // Keep the HTTP status fallback.
+      }
+      throw new Error(detail);
+    }
+    const contentType = response.headers.get('content-type') || '';
+    let result: { blob?: Blob; url?: string };
+    if (contentType.includes('application/json')) {
+      const payload = await response.json();
+      if (payload.status_url && !payload.url) {
+        result = await this.pollSnapshot(payload.status_url, {
+          ...this.options.snapshotHeaders,
+          ...options.headers,
+        }, options.signal);
+      } else {
+        result = { url: payload.url as string };
+      }
+    } else {
+      result = { blob: await response.blob() };
+    }
+    this.emit('snapshotcomplete', { viewport, ...result });
+    return result;
+  }
+
+  private async pollSnapshot(
+    statusUrl: string,
+    headers: Record<string, string>,
+    signal?: AbortSignal,
+  ): Promise<{ url?: string }> {
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      if (signal?.aborted) {
+        throw new DOMException('Snapshot request aborted', 'AbortError');
+      }
+      if (attempt > 0) {
+        await new Promise<void>((resolve, reject) => {
+          const timeout = window.setTimeout(resolve, 1000);
+          signal?.addEventListener('abort', () => {
+            window.clearTimeout(timeout);
+            reject(new DOMException('Snapshot request aborted', 'AbortError'));
+          }, { once: true });
+        });
+      }
+      const response = await fetch(statusUrl, { headers, signal });
+      if (signal?.aborted) {
+        throw new DOMException('Snapshot request aborted', 'AbortError');
+      }
+      const payload = await response.json();
+      if (!response.ok || payload.status === 'failed') {
+        throw new Error(payload.detail || `Snapshot generation failed (${response.status})`);
+      }
+      if (payload.status === 'complete') return { url: payload.url };
+    }
+    throw new Error('Snapshot generation timed out');
+  }
+
+  public getSerializableConfig(): SerializablePlayerConfig {
+    return {
+      imageUrl: this.options.imageUrl,
+      autoLoad: this.options.autoLoad !== false,
+      showControls: this.options.showControls !== false,
+      compass: this.options.compass === true,
+      mouseZoom: this.options.mouseZoom !== false,
+      doubleClickZoom: this.options.doubleClickZoom !== false,
+      touchPanAndZoom: this.options.touchPanAndZoom !== false,
+      colorFilters: this.getColorFilters(),
+      initialView: this.getView(),
+      brandingMode: this.options.brandingMode || 'branded',
+      allowExternalLinks: this.options.allowExternalLinks !== false,
+      nadir: this.options.nadir,
+      hotspots: this.hotspots.map(({ options }) => {
+        const serializable = { ...options };
+        delete serializable.onClick;
+        return serializable;
+      }),
+    };
+  }
+
+  public async exportOffline(options: OfflineExportOptions = {}): Promise<Blob> {
+    const config = this.getSerializableConfig();
+    const files: Record<string, Uint8Array> = {};
+    const scriptUrl = options.playerScriptUrl || './360-image-player.standalone.umd.min.js';
+    let offlineImageUrl = config.imageUrl;
+    let offlineNadirUrl = config.nadir?.imageUrl;
+
+    if (options.fetchAssets !== false) {
+      const assets = [
+        { url: config.imageUrl, name: `assets/panorama${this.extensionFromUrl(config.imageUrl, '.jpg')}` },
+        ...(config.nadir?.imageUrl
+          ? [{ url: config.nadir.imageUrl, name: `assets/nadir${this.extensionFromUrl(config.nadir.imageUrl, '.png')}` }]
+          : []),
+        { url: scriptUrl, name: '360-image-player.standalone.umd.min.js' },
+      ];
+      for (const asset of assets) {
+        const response = await fetch(asset.url);
+        if (!response.ok) throw new Error(`Unable to export asset: ${asset.url}`);
+        files[asset.name] = new Uint8Array(await response.arrayBuffer());
+        if (asset.url === config.imageUrl) offlineImageUrl = asset.name;
+        if (asset.url === config.nadir?.imageUrl) offlineNadirUrl = asset.name;
+      }
+    }
+
+    const exportedConfig: SerializablePlayerConfig = {
+      ...config,
+      imageUrl: offlineImageUrl,
+      nadir: config.nadir
+        ? { ...config.nadir, imageUrl: offlineNadirUrl || config.nadir.imageUrl }
+        : undefined,
+    };
+    const configJson = JSON.stringify(exportedConfig, null, 2);
+    files['config.json'] = strToU8(configJson);
+    files['index.html'] = strToU8(this.buildOfflineHTML(exportedConfig, options.fetchAssets === false ? scriptUrl : './360-image-player.standalone.umd.min.js'));
+    return new Blob([zipSync(files)], { type: 'application/zip' });
+  }
+
+  private extensionFromUrl(url: string, fallback: string): string {
+    try {
+      const extension = new URL(url, window.location.href).pathname.match(/\.[a-z0-9]+$/i)?.[0];
+      return extension || fallback;
+    } catch {
+      return fallback;
+    }
+  }
+
+  private buildOfflineHTML(config: SerializablePlayerConfig, scriptUrl: string): string {
+    const serialized = JSON.stringify(config).replace(/</g, '\\u003c');
+    return `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>360 Tour</title>
+<style>html,body,#viewer{width:100%;height:100%;margin:0;background:#111}</style></head>
+<body><div id="viewer"></div><script src="${scriptUrl}"></script><script>
+const config=${serialized};
+const player=new Image360Player.Image360Player({...config,container:document.getElementById('viewer')});
+(config.hotspots||[]).forEach(hotspot=>player.addHTMLOverlay(hotspot));
+</script></body></html>`;
+  }
+
   public destroy(): void {
+    this.isDestroyed = true;
     if (this.renderer) {
       this.renderer.setAnimationLoop(null);
+    }
+    if (this.xrSession) {
+      void this.xrSession.end();
+      this.xrSession = null;
     }
 
     if (this.resizeObserver) {
@@ -860,7 +1479,12 @@ export class Image360Player {
       }
       this.material.dispose();
     }
+    if (this.nadirMesh) this.nadirMesh.geometry.dispose();
+    if (this.nadirMaterial) this.nadirMaterial.dispose();
+    if (this.nadirTexture) this.nadirTexture.dispose();
     if (this.renderer) this.renderer.dispose();
+    this.listeners = {};
+    this.hotspots = [];
   }
 
   private triggerRedraw(): void {
@@ -872,7 +1496,7 @@ export class Image360Player {
       const canvas = document.createElement('canvas');
       return !!(window.WebGLRenderingContext && 
         (canvas.getContext('webgl') || canvas.getContext('experimental-webgl')));
-    } catch (e) {
+    } catch {
       return false;
     }
   }

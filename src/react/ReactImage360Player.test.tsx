@@ -11,6 +11,9 @@ vi.mock('../index', async (importOriginal) => {
     this.destroy = vi.fn();
     this.setColorFilters = vi.fn();
     this.setImageUrl = vi.fn();
+    this.setNadirCover = vi.fn();
+    this.setBrandingMode = vi.fn();
+    this.setGameState = vi.fn();
     this.addHTMLOverlay = vi.fn();
     this.removeHTMLOverlay = vi.fn();
     this.getYaw = vi.fn().mockReturnValue(0);
@@ -44,14 +47,44 @@ describe('ReactImage360Player', () => {
   });
 
   it('initializes Image360Player on mount', () => {
-    render(<ReactImage360Player imageUrl="test.jpg" autoLoad={false} />);
+    const colorFilters = { exposure: 0.25 };
+    const initialView = { yaw: 10, pitch: 5, hfov: 75 };
+    const nadir = { imageUrl: 'logo.png' };
+    const snapshotHeaders = { Authorization: 'Bearer token' };
+    const sanitizer = vi.fn((html: string) => html);
+    render(
+      <ReactImage360Player
+        imageUrl="test.jpg"
+        autoLoad={false}
+        colorFilters={colorFilters}
+        initialView={initialView}
+        nadir={nadir}
+        brandingMode="unbranded"
+        allowExternalLinks={false}
+        sanitizeHTML={sanitizer}
+        snapshotEndpoint="/api/snapshot/"
+        snapshotHeaders={snapshotHeaders}
+      />
+    );
     
     expect(Image360Player).toHaveBeenCalledWith(
       expect.objectContaining({
         imageUrl: 'test.jpg',
         autoLoad: false,
+        colorFilters,
+        initialView,
+        nadir,
+        brandingMode: 'unbranded',
+        allowExternalLinks: false,
+        sanitizeHTML: sanitizer,
+        snapshotEndpoint: '/api/snapshot/',
+        snapshotHeaders,
       })
     );
+
+    const mockPlayerInstance = vi.mocked(Image360Player).mock.results[0].value;
+    expect(mockPlayerInstance.setImageUrl).not.toHaveBeenCalled();
+    expect(mockPlayerInstance.setColorFilters).not.toHaveBeenCalled();
   });
 
   it('destroys Image360Player instance on unmount', () => {
@@ -170,5 +203,108 @@ describe('ReactImage360Player', () => {
     expect(mockPlayerInstance.setImageUrl).toHaveBeenCalledWith('test2.jpg');
     // Verify constructor wasn't called again
     expect(Image360Player).toHaveBeenCalledTimes(1);
+
+    rerender(<ReactImage360Player imageUrl="test1.jpg" />);
+    expect(mockPlayerInstance.setImageUrl).toHaveBeenLastCalledWith('test1.jpg');
+  });
+
+  it('updates nadir, branding mode, and game state without recreating the player', () => {
+    const initialNadir = { imageUrl: 'logo-1.png' };
+    const { rerender } = render(
+      <ReactImage360Player
+        imageUrl="test.jpg"
+        nadir={initialNadir}
+        brandingMode="branded"
+        gameState={{ discoveredClues: ['initial'] }}
+      />
+    );
+    const player = vi.mocked(Image360Player).mock.results[0].value;
+    expect(player.setNadirCover).not.toHaveBeenCalled();
+    expect(player.setBrandingMode).not.toHaveBeenCalled();
+    expect(player.setGameState).toHaveBeenCalledWith({ discoveredClues: ['initial'] });
+
+    const nextState = {
+      discoveredClues: ['key'],
+      unlockedHotspots: ['door'],
+      answeredQuizzes: { quiz: 'yes' },
+    };
+    rerender(
+      <ReactImage360Player
+        imageUrl="test.jpg"
+        nadir={{ imageUrl: 'logo-2.png' }}
+        brandingMode="unbranded"
+        gameState={nextState}
+      />
+    );
+
+    expect(player.setNadirCover).toHaveBeenCalledWith({ imageUrl: 'logo-2.png' });
+    expect(player.setBrandingMode).toHaveBeenCalledWith('unbranded');
+    expect(player.setGameState).toHaveBeenLastCalledWith(nextState);
+    expect(Image360Player).toHaveBeenCalledTimes(1);
+  });
+
+  it('forwards every advanced event and unregisters listeners on unmount', () => {
+    const callbacks = {
+      onQuizAnswer: vi.fn(),
+      onClueDiscovered: vi.fn(),
+      onUnlock: vi.fn(),
+      onAddToCart: vi.fn(),
+      onSnapshotStart: vi.fn(),
+      onSnapshotComplete: vi.fn(),
+    };
+    const { unmount } = render(
+      <ReactImage360Player imageUrl="test.jpg" {...callbacks} />
+    );
+    const player = vi.mocked(Image360Player).mock.results[0].value;
+    const eventPayloads: Record<string, any> = {
+      quizanswer: { correct: true },
+      cluediscovered: { clueId: 'key' },
+      unlock: { hotspotIds: ['door'] },
+      addtocart: { product: { id: 'sku' } },
+      snapshotstart: { viewport: { yaw: 0, pitch: 0, hfov: 90 } },
+      snapshotcomplete: { url: '/snapshot.jpg' },
+    };
+    const callbackByEvent: Record<string, ReturnType<typeof vi.fn>> = {
+      quizanswer: callbacks.onQuizAnswer,
+      cluediscovered: callbacks.onClueDiscovered,
+      unlock: callbacks.onUnlock,
+      addtocart: callbacks.onAddToCart,
+      snapshotstart: callbacks.onSnapshotStart,
+      snapshotcomplete: callbacks.onSnapshotComplete,
+    };
+
+    Object.entries(eventPayloads).forEach(([event, payload]) => {
+      const registration = vi.mocked(player.on).mock.calls.find((call: any) => call[0] === event);
+      expect(registration).toBeDefined();
+      registration![1](payload);
+      expect(callbackByEvent[event]).toHaveBeenCalledWith(payload);
+    });
+
+    unmount();
+    Object.keys(eventPayloads).forEach(event => {
+      expect(player.off).toHaveBeenCalledWith(event, expect.any(Function));
+    });
+  });
+
+  it('supports callback refs and clears them on unmount', () => {
+    const ref = vi.fn();
+    const { unmount } = render(<ReactImage360Player ref={ref} imageUrl="test.jpg" />);
+    const player = vi.mocked(Image360Player).mock.results[0].value;
+
+    expect(ref).toHaveBeenCalledWith(player);
+    unmount();
+    expect(ref).toHaveBeenLastCalledWith(null);
+  });
+
+  it('generates stable cleanup ids for hotspots without explicit ids', () => {
+    const { rerender } = render(
+      <ReactImage360Player imageUrl="test.jpg" hotspots={[{ yaw: 1, pitch: 2 }]} />
+    );
+    const player = vi.mocked(Image360Player).mock.results[0].value;
+    const generated = player.addHTMLOverlay.mock.calls[0][0].id;
+    expect(generated).toMatch(/^react-hotspot-/);
+
+    rerender(<ReactImage360Player imageUrl="test.jpg" hotspots={[]} />);
+    expect(player.removeHTMLOverlay).toHaveBeenCalledWith(generated);
   });
 });

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as THREE from 'three';
+import { strFromU8, unzipSync } from 'fflate';
 import { Image360Player } from './index';
 
 describe('Image360Player', () => {
@@ -13,6 +14,7 @@ describe('Image360Player', () => {
 
   afterEach(() => {
     container.remove();
+    vi.unstubAllGlobals();
   });
 
   it('should initialize and append canvas with default options', () => {
@@ -200,7 +202,7 @@ describe('Image360Player', () => {
   it('should enable XR on the renderer and create a VR button if WebXR is supported', async () => {
     vi.mocked(navigator.xr!.isSessionSupported).mockResolvedValue(true);
 
-    const player = new Image360Player({
+    new Image360Player({
       container,
       imageUrl: 'test.jpg'
     });
@@ -264,7 +266,7 @@ describe('Image360Player', () => {
     const fallbackContainer = document.createElement('div');
     document.body.appendChild(fallbackContainer);
 
-    const player = new Image360Player({
+    new Image360Player({
       container: fallbackContainer,
       imageUrl: 'test.jpg'
     });
@@ -374,7 +376,7 @@ describe('Image360Player', () => {
     };
     vi.mocked(navigator.xr!.requestSession).mockResolvedValue(mockSession as any);
 
-    const player = new Image360Player({
+    new Image360Player({
       container,
       imageUrl: 'test.jpg'
     });
@@ -433,5 +435,568 @@ describe('Image360Player', () => {
     expect(container.innerHTML).toBe('');
     // Check that renderer.dispose was called
     expect(rendererInstance.dispose).toHaveBeenCalled();
+  });
+
+  it('honors autoLoad=false and supports explicit loading', () => {
+    const player = new Image360Player({
+      container,
+      imageUrl: 'lazy.jpg',
+      autoLoad: false,
+    });
+
+    expect(THREE.TextureLoader).not.toHaveBeenCalled();
+    player.load();
+    expect(THREE.TextureLoader).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders controls and compass when enabled', () => {
+    new Image360Player({
+      container,
+      imageUrl: 'test.jpg',
+      showControls: true,
+      compass: true,
+    });
+
+    expect(container.querySelectorAll('.image360-control-button')).toHaveLength(3);
+    expect(container.querySelector('.image360-compass')).toBeInTheDocument();
+  });
+
+  it('sets and clamps the viewport through the public API', () => {
+    const player = new Image360Player({ container, imageUrl: 'test.jpg' });
+    player.setView({ yaw: 240, pitch: 100, hfov: 5 });
+
+    expect(player.getView()).toEqual({ yaw: -120, pitch: 85, hfov: 30 });
+  });
+
+  it('sanitizes custom hotspot HTML', () => {
+    const player = new Image360Player({ container, imageUrl: 'test.jpg' });
+    player.addHTMLOverlay({
+      id: 'unsafe',
+      yaw: 0,
+      pitch: 0,
+      html: '<button onclick="alert(1)">Safe</button><script>alert(2)</script>',
+    });
+
+    expect(container.querySelector('script')).not.toBeInTheDocument();
+    expect(container.querySelector('button')?.hasAttribute('onclick')).toBe(false);
+  });
+
+  it('supports quiz unlocks and product cart events', () => {
+    const player = new Image360Player({ container, imageUrl: 'test.jpg' });
+    const quizSpy = vi.fn();
+    const cartSpy = vi.fn();
+    player.on('quizanswer', quizSpy);
+    player.on('addtocart', cartSpy);
+    player.addHTMLOverlay({
+      id: 'quiz',
+      type: 'quiz',
+      yaw: 0,
+      pitch: 0,
+      unlocks: ['product'],
+      quizChoices: [{ id: 'yes', label: 'Yes', correct: true }],
+    });
+    player.addHTMLOverlay({
+      id: 'product',
+      type: 'product',
+      yaw: 10,
+      pitch: 0,
+      requires: ['product'],
+      product: { id: 'sku-1', title: 'Chair', price: '$99' },
+    });
+
+    expect(player.answerQuiz('quiz', 'yes')).toBe(true);
+    expect(quizSpy).toHaveBeenCalledWith(expect.objectContaining({ correct: true }));
+    expect(player.getGameState().unlockedHotspots).toContain('product');
+
+    const productHotspots = Array.from(container.querySelectorAll('.default-hotspot-container'));
+    const product = productHotspots[productHotspots.length - 1];
+    product.dispatchEvent(new MouseEvent('click'));
+    expect(cartSpy).toHaveBeenCalledWith(expect.objectContaining({
+      product: expect.objectContaining({ id: 'sku-1' }),
+    }));
+  });
+
+  it('requests a server snapshot with the current viewport', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      json: vi.fn().mockResolvedValue({ url: '/media/snapshot.jpg' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const player = new Image360Player({ container, imageUrl: 'test.jpg' });
+    player.setView({ yaw: 20, pitch: -5, hfov: 70 });
+
+    await expect(player.requestSnapshot({ endpoint: '/api/media/1/snapshot/' }))
+      .resolves.toEqual({ url: '/media/snapshot.jpg' });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual(expect.objectContaining({
+      yaw: 20,
+      pitch: -5,
+      hfov: 70,
+      width: 3840,
+      height: 2160,
+    }));
+  });
+
+  it('serializes configuration without callback functions', () => {
+    const player = new Image360Player({ container, imageUrl: 'test.jpg' });
+    player.addHTMLOverlay({
+      id: 'serializable',
+      yaw: 0,
+      pitch: 0,
+      onClick: vi.fn(),
+    });
+
+    const config = player.getSerializableConfig();
+    expect(config.hotspots[0].onClick).toBeUndefined();
+    expect(JSON.stringify(config)).toContain('serializable');
+  });
+
+  it('renders and removes a nadir cover', () => {
+    const player = new Image360Player({
+      container,
+      imageUrl: 'test.jpg',
+      nadir: { imageUrl: 'logo.png', radius: 40 },
+    });
+
+    expect((player as any).nadirMesh).toBeDefined();
+    player.setNadirCover(undefined);
+    expect((player as any).nadirMesh).toBeUndefined();
+  });
+
+  it('hides branded hotspots in unbranded mode', () => {
+    const player = new Image360Player({
+      container,
+      imageUrl: 'test.jpg',
+      brandingMode: 'unbranded',
+    });
+    player.addHTMLOverlay({ id: 'branded', yaw: 0, pitch: 0, text: 'Brand' });
+    player.addHTMLOverlay({ id: 'mls-safe', yaw: 0, pitch: 0, text: 'Safe', branded: false });
+
+    const hotspots = container.querySelectorAll('.default-hotspot-container');
+    expect((hotspots[0] as HTMLElement).style.display).toBe('none');
+    expect((hotspots[1] as HTMLElement).style.display).not.toBe('none');
+  });
+
+  it('creates an offline ZIP blob from serializable state', async () => {
+    const player = new Image360Player({ container, imageUrl: 'test.jpg' });
+    const zip = await player.exportOffline({ fetchAssets: false });
+
+    expect(zip).toBeInstanceOf(Blob);
+    expect(zip.type).toBe('application/zip');
+    expect(zip.size).toBeGreaterThan(0);
+  });
+
+  it('uses zoom and reset controls and rotates the compass', () => {
+    const player = new Image360Player({
+      container,
+      imageUrl: 'test.jpg',
+      showControls: true,
+      compass: true,
+    });
+    const buttons = container.querySelectorAll<HTMLButtonElement>('.image360-control-button');
+
+    buttons[0].click();
+    expect(player.getHfov()).toBe(80);
+    buttons[1].click();
+    expect(player.getHfov()).toBe(90);
+
+    player.setView({ yaw: 45, pitch: 10, hfov: 60 });
+    expect((container.querySelector('.image360-compass') as HTMLElement).style.transform)
+      .toBe('rotate(-45deg)');
+    buttons[2].click();
+    expect(player.getView()).toEqual({ yaw: 0, pitch: 0, hfov: 90 });
+  });
+
+  it('uses a custom HTML sanitizer when provided', () => {
+    const sanitizer = vi.fn().mockReturnValue('<strong>clean</strong>');
+    const player = new Image360Player({
+      container,
+      imageUrl: 'test.jpg',
+      sanitizeHTML: sanitizer,
+    });
+
+    player.addHTMLOverlay({ yaw: 0, pitch: 0, html: '<script>bad()</script>' });
+
+    expect(sanitizer).toHaveBeenCalledWith('<script>bad()</script>');
+    expect(container.querySelector('strong')?.textContent).toBe('clean');
+  });
+
+  it('blocks external links when disabled or while unbranded', () => {
+    const openSpy = vi.spyOn(window, 'open');
+    const player = new Image360Player({
+      container,
+      imageUrl: 'test.jpg',
+      allowExternalLinks: false,
+    });
+    player.addHTMLOverlay({ id: 'link', yaw: 0, pitch: 0, url: 'https://example.com' });
+    (container.querySelector('.default-hotspot-container') as HTMLElement).click();
+    expect(openSpy).not.toHaveBeenCalled();
+
+    const secondContainer = document.createElement('div');
+    document.body.appendChild(secondContainer);
+    const unbranded = new Image360Player({
+      container: secondContainer,
+      imageUrl: 'test.jpg',
+      brandingMode: 'unbranded',
+    });
+    unbranded.addHTMLOverlay({
+      id: 'safe-link',
+      yaw: 0,
+      pitch: 0,
+      url: 'https://example.com',
+      branded: false,
+    });
+    (secondContainer.querySelector('.default-hotspot-container') as HTMLElement).click();
+    expect(openSpy).not.toHaveBeenCalled();
+    unbranded.destroy();
+    secondContainer.remove();
+  });
+
+  it('handles incorrect quiz answers, clues, duplicate unlocks, and restored state', () => {
+    const player = new Image360Player({ container, imageUrl: 'test.jpg' });
+    const clueSpy = vi.fn();
+    const unlockSpy = vi.fn();
+    player.on('cluediscovered', clueSpy);
+    player.on('unlock', unlockSpy);
+    player.addHTMLOverlay({
+      id: 'quiz',
+      type: 'quiz',
+      yaw: 0,
+      pitch: 0,
+      quizChoices: [{ id: 'wrong', label: 'Wrong' }],
+      unlocks: ['door'],
+    });
+    player.addHTMLOverlay({
+      id: 'clue',
+      type: 'clue',
+      yaw: 5,
+      pitch: 0,
+      clueId: 'key',
+      unlocks: ['door'],
+    });
+
+    expect(player.answerQuiz('missing', 'wrong')).toBe(false);
+    expect(player.answerQuiz('quiz', 'missing')).toBe(false);
+    expect(player.answerQuiz('quiz', 'wrong')).toBe(false);
+    expect(player.getGameState().unlockedHotspots).toEqual([]);
+
+    const clue = container.querySelectorAll<HTMLElement>('.default-hotspot-container')[1];
+    clue.click();
+    clue.click();
+    expect(clueSpy).toHaveBeenCalledTimes(1);
+    expect(unlockSpy).toHaveBeenCalledTimes(1);
+
+    player.setGameState({
+      discoveredClues: ['saved-clue'],
+      unlockedHotspots: ['saved-door'],
+      answeredQuizzes: { quiz: 'wrong' },
+    });
+    expect(player.getGameState()).toEqual({
+      discoveredClues: ['saved-clue'],
+      unlockedHotspots: ['saved-door'],
+      answeredQuizzes: { quiz: 'wrong' },
+    });
+  });
+
+  it('returns binary snapshot responses and emits lifecycle events', async () => {
+    const blob = new Blob(['snapshot'], { type: 'image/jpeg' });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      headers: new Headers({ 'content-type': 'image/jpeg' }),
+      blob: vi.fn().mockResolvedValue(blob),
+    }));
+    const player = new Image360Player({ container, imageUrl: 'test.jpg' });
+    const startSpy = vi.fn();
+    const completeSpy = vi.fn();
+    player.on('snapshotstart', startSpy);
+    player.on('snapshotcomplete', completeSpy);
+
+    await expect(player.requestSnapshot({ endpoint: '/snapshot' })).resolves.toEqual({ blob });
+    expect(startSpy).toHaveBeenCalledWith({ viewport: player.getView() });
+    expect(completeSpy).toHaveBeenCalledWith({ viewport: player.getView(), blob });
+  });
+
+  it('reports snapshot HTTP and JSON errors', async () => {
+    const player = new Image360Player({ container, imageUrl: 'test.jpg' });
+    await expect(player.requestSnapshot()).rejects.toThrow('A snapshot endpoint is required');
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 422,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      json: vi.fn().mockResolvedValue({ detail: 'Invalid viewport' }),
+    }));
+    await expect(player.requestSnapshot({ endpoint: '/snapshot' }))
+      .rejects.toThrow('Invalid viewport');
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      headers: new Headers(),
+      json: vi.fn().mockRejectedValue(new Error('not json')),
+    }));
+    await expect(player.requestSnapshot({ endpoint: '/snapshot' }))
+      .rejects.toThrow('Snapshot request failed (500)');
+  });
+
+  it('polls pending snapshot tasks until completion', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: vi.fn().mockResolvedValue({ status_url: '/snapshot/status' }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: vi.fn().mockResolvedValue({ status: 'pending' }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: vi.fn().mockResolvedValue({ status: 'complete', url: '/done.jpg' }),
+      });
+    vi.stubGlobal('fetch', fetchMock);
+    const player = new Image360Player({ container, imageUrl: 'test.jpg' });
+
+    const request = player.requestSnapshot({ endpoint: '/snapshot' });
+    await vi.runAllTimersAsync();
+    await expect(request).resolves.toEqual({ url: '/done.jpg' });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    vi.useRealTimers();
+  });
+
+  it('rejects failed, aborted, and timed-out snapshot polling', async () => {
+    const player = new Image360Player({ container, imageUrl: 'test.jpg' });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: vi.fn().mockResolvedValue({ status: 'failed', detail: 'Worker failed' }),
+    }));
+    await expect((player as any).pollSnapshot('/status', {})).rejects.toThrow('Worker failed');
+
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ status: 'pending' }),
+    }));
+    const aborted = (player as any).pollSnapshot('/status', {}, controller.signal);
+    const abortedExpectation = expect(aborted).rejects.toMatchObject({ name: 'AbortError' });
+    await Promise.resolve();
+    controller.abort();
+    await vi.runAllTimersAsync();
+    await abortedExpectation;
+
+    const timedOut = (player as any).pollSnapshot('/status', {});
+    const timeoutExpectation = expect(timedOut).rejects.toThrow('Snapshot generation timed out');
+    await vi.runAllTimersAsync();
+    await timeoutExpectation;
+    vi.useRealTimers();
+  });
+
+  it('exports fetched assets and reports asset failures', async () => {
+    const player = new Image360Player({
+      container,
+      imageUrl: 'https://cdn.example.com/pano.webp',
+      nadir: { imageUrl: 'https://cdn.example.com/logo.png' },
+    });
+    const fetchMock = vi.fn().mockImplementation((url: string) => Promise.resolve({
+      ok: true,
+      arrayBuffer: vi.fn().mockResolvedValue(new TextEncoder().encode(url).buffer),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const blob = await player.exportOffline({
+      playerScriptUrl: 'https://cdn.example.com/player.js',
+      fetchAssets: true,
+    });
+    const archive = unzipSync(new Uint8Array(await blob.arrayBuffer()));
+    expect(Object.keys(archive).sort()).toEqual([
+      '360-image-player.standalone.umd.min.js',
+      'assets/nadir.png',
+      'assets/panorama.webp',
+      'config.json',
+      'index.html',
+    ]);
+    const config = JSON.parse(strFromU8(archive['config.json']));
+    expect(config.imageUrl).toBe('assets/panorama.webp');
+    expect(config.nadir.imageUrl).toBe('assets/nadir.png');
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false }));
+    await expect(player.exportOffline({ playerScriptUrl: '/player.js' }))
+      .rejects.toThrow('Unable to export asset');
+  });
+
+  it('disposes asynchronously loaded textures after destruction', () => {
+    let finishLoad: ((texture: any) => void) | undefined;
+    const texture = { dispose: vi.fn() };
+    vi.mocked(THREE.TextureLoader).mockImplementationOnce(function (this: any) {
+      this.setCrossOrigin = vi.fn().mockReturnThis();
+      this.load = vi.fn((_url, onLoad) => {
+        finishLoad = onLoad;
+        return texture;
+      });
+      return this;
+    } as any);
+    const player = new Image360Player({ container, imageUrl: 'late.jpg' });
+    player.destroy();
+    finishLoad?.(texture);
+    expect(texture.dispose).toHaveBeenCalled();
+  });
+
+  it('ends an active XR session and disposes nadir resources on destroy', () => {
+    const player = new Image360Player({
+      container,
+      imageUrl: 'test.jpg',
+      nadir: { imageUrl: 'logo.png' },
+    });
+    const session = { end: vi.fn().mockResolvedValue(undefined) };
+    (player as any).xrSession = session;
+    const nadirTexture = (player as any).nadirTexture;
+    const nadirMaterial = (player as any).nadirMaterial;
+    const nadirGeometry = (player as any).nadirMesh.geometry;
+    const materialDispose = vi.spyOn(nadirMaterial, 'dispose');
+    const geometryDispose = vi.spyOn(nadirGeometry, 'dispose');
+
+    player.destroy();
+
+    expect(session.end).toHaveBeenCalled();
+    expect(nadirTexture.dispose).toHaveBeenCalled();
+    expect(materialDispose).toHaveBeenCalled();
+    expect(geometryDispose).toHaveBeenCalled();
+  });
+
+  it('covers individual viewport setters and optional UI disablement', () => {
+    const player = new Image360Player({
+      container,
+      imageUrl: 'test.jpg',
+      showControls: false,
+      compass: false,
+    });
+    player.setYaw(-30);
+    player.setPitch(-100);
+    player.setHfov(200);
+
+    expect(player.getView()).toEqual({ yaw: -30, pitch: -85, hfov: 120 });
+    expect(container.querySelector('.image360-controls')).not.toBeInTheDocument();
+    expect(container.querySelector('.image360-compass')).not.toBeInTheDocument();
+  });
+
+  it('disposes stale nadir loads and clamps nadir rendering options', () => {
+    const callbacks: Array<(texture: any) => void> = [];
+    vi.mocked(THREE.TextureLoader).mockImplementation(function (this: any) {
+      this.setCrossOrigin = vi.fn().mockReturnThis();
+      this.load = vi.fn((_url, onLoad) => {
+        callbacks.push(onLoad);
+      });
+      return this;
+    } as any);
+    const player = new Image360Player({ container, imageUrl: 'test.jpg', autoLoad: false });
+    const firstTexture = { dispose: vi.fn() };
+    const secondTexture = { dispose: vi.fn(), colorSpace: '' };
+
+    player.setNadirCover({ imageUrl: 'first.png' });
+    player.setNadirCover({ imageUrl: 'second.png', radius: 500, opacity: 2, rotation: 45 });
+    callbacks[0](firstTexture);
+    callbacks[1](secondTexture);
+
+    expect(firstTexture.dispose).toHaveBeenCalled();
+    expect(secondTexture.dispose).not.toHaveBeenCalled();
+    expect((player as any).nadirMesh.rotation.z).toBeCloseTo(Math.PI / 4);
+    expect((player as any).nadirMaterial.opacity).toBe(1);
+  });
+
+  it('renders product and quiz UI including hover and answer interaction', () => {
+    const player = new Image360Player({ container, imageUrl: 'test.jpg' });
+    const quizSpy = vi.fn();
+    player.on('quizanswer', quizSpy);
+    player.addHTMLOverlay({
+      id: 'product-ui',
+      type: 'product',
+      yaw: 0,
+      pitch: 0,
+      text: 'Product',
+      product: {
+        id: 'sku',
+        title: 'Lamp',
+        price: '$20',
+        imageUrl: 'lamp.jpg',
+      },
+    });
+    player.addHTMLOverlay({
+      id: 'quiz-ui',
+      type: 'quiz',
+      yaw: 10,
+      pitch: 0,
+      title: 'Choose',
+      text: 'Question',
+      quizChoices: [{ id: 'a', label: 'Answer', correct: true }],
+    });
+
+    const product = container.querySelectorAll<HTMLElement>('.default-hotspot-container')[0];
+    expect(product.querySelector('img')?.getAttribute('src')).toBe('lamp.jpg');
+    expect(product.textContent).toContain('Lamp');
+    expect(product.textContent).toContain('$20');
+    product.dispatchEvent(new MouseEvent('mouseenter'));
+    expect((product.querySelector('.default-hotspot-tooltip') as HTMLElement).style.opacity).toBe('1');
+    product.dispatchEvent(new MouseEvent('mouseleave'));
+    expect((product.querySelector('.default-hotspot-tooltip') as HTMLElement).style.opacity).toBe('0');
+
+    const quiz = container.querySelectorAll<HTMLElement>('.default-hotspot-container')[1];
+    (quiz.querySelector('button') as HTMLButtonElement).click();
+    expect(quizSpy).toHaveBeenCalledWith(expect.objectContaining({ correct: true }));
+  });
+
+  it('merges snapshot headers and sends custom output options', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      json: vi.fn().mockResolvedValue({ url: '/snapshot.webp' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const player = new Image360Player({
+      container,
+      imageUrl: 'test.jpg',
+      snapshotEndpoint: '/default-snapshot',
+      snapshotHeaders: { Authorization: 'Bearer token', 'X-Shared': 'default' },
+    });
+
+    await player.requestSnapshot({
+      mediaId: 'media-1',
+      width: 1000,
+      height: 500,
+      quality: 0.5,
+      format: 'webp',
+      headers: { 'X-Shared': 'override' },
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith('/default-snapshot', expect.objectContaining({
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token',
+        'X-Shared': 'override',
+      },
+    }));
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual(expect.objectContaining({
+      media_id: 'media-1',
+      width: 1000,
+      height: 500,
+      quality: 0.5,
+      format: 'webp',
+    }));
+  });
+
+  it('creates safe offline HTML with a custom external script URL', async () => {
+    const player = new Image360Player({ container, imageUrl: 'not a valid url%' });
+    player.addHTMLOverlay({ yaw: 0, pitch: 0, text: '</script><script>bad()</script>' });
+    const zip = await player.exportOffline({
+      fetchAssets: false,
+      playerScriptUrl: 'https://cdn.example.com/player.js',
+    });
+    const archive = unzipSync(new Uint8Array(await zip.arrayBuffer()));
+    const html = strFromU8(archive['index.html']);
+
+    expect(html).not.toContain('</script><script>bad()');
+    expect(html).toContain('https://cdn.example.com/player.js');
   });
 });

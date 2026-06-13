@@ -18,7 +18,6 @@ export default defineConfig({
       ),
       formats: ['es', 'cjs'],
     },
-    minify: 'esbuild',
     sourcemap: false,
     rollupOptions: {
       external: ['three', 'react', 'react-dom'],

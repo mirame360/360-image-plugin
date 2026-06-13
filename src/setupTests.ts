@@ -28,6 +28,7 @@ HTMLCanvasElement.prototype.getContext = vi.fn().mockImplementation((contextType
 
 HTMLCanvasElement.prototype.setPointerCapture = vi.fn();
 HTMLCanvasElement.prototype.releasePointerCapture = vi.fn();
+window.open = vi.fn();
 
 // We mock the parts of 'three' that require WebGL/Canvas rendering, while keeping the rest.
 vi.mock('three', async (importOriginal) => {
