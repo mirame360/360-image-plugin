@@ -3,6 +3,8 @@ dist
 dist-demo
 .DS_Store
 coverage
+playwright-report
+test-results
 .env
 .env.*
 !.env.example

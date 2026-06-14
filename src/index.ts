@@ -635,6 +635,7 @@ export class Image360Player {
       500 * Math.sin(phi) * Math.sin(theta)
     );
     this.camera.lookAt(target);
+    this.camera.updateMatrixWorld(true);
     this.updateCompass();
     this.emit('viewchange', { yaw: this.getYaw(), pitch: this.pitch, hfov: this.hfov });
   }

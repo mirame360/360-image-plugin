@@ -468,6 +468,22 @@ describe('Image360Player', () => {
     expect(player.getView()).toEqual({ yaw: -120, pitch: 85, hfov: 30 });
   });
 
+  it('reprojects hotspots with the latest camera matrix after setView', () => {
+    const player = new Image360Player({ container, imageUrl: 'test.jpg' });
+    player.addHTMLOverlay({
+      id: 'target',
+      yaw: 90,
+      pitch: 10,
+      text: 'Target',
+    });
+
+    player.setView({ yaw: 90, pitch: 10 });
+
+    const hotspot = container.querySelector<HTMLElement>('.default-hotspot-container');
+    expect(Number.parseFloat(hotspot?.style.left || '')).toBeCloseTo(400);
+    expect(Number.parseFloat(hotspot?.style.top || '')).toBeCloseTo(300);
+  });
+
   it('sanitizes custom hotspot HTML', () => {
     const player = new Image360Player({ container, imageUrl: 'test.jpg' });
     player.addHTMLOverlay({
