@@ -600,7 +600,10 @@ export class Image360Player {
           texture.dispose();
           return;
         }
-        texture.colorSpace = THREE.SRGBColorSpace;
+        // Keep panorama sampling in the encoded color space. The custom shader
+        // does not use Three's color-management chunks, so marking this as
+        // SRGBColorSpace makes neutral images render too dark.
+        texture.colorSpace = THREE.NoColorSpace;
         texture.minFilter = THREE.LinearFilter;
         texture.magFilter = THREE.LinearFilter;
         texture.generateMipmaps = false;

@@ -108,6 +108,19 @@ describe('Image360Player', () => {
     );
   });
 
+  it('keeps panorama textures in raw color space for neutral rendering', () => {
+    new Image360Player({
+      container,
+      imageUrl: 'color-managed.jpg'
+    });
+
+    const loaderMock = vi.mocked(THREE.TextureLoader);
+    const loaderInstance = loaderMock.mock.results[0].value;
+    const loadedTexture = loaderInstance.load.mock.results[0].value;
+
+    expect(loadedTexture.colorSpace).toBe(THREE.NoColorSpace);
+  });
+
   it('should add and remove HTML hotspot overlays', () => {
     const player = new Image360Player({
       container,
