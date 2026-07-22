@@ -63,6 +63,12 @@ player.on('addtocart', ({ product }) => {
 player.setView({ yaw: 30, pitch: -5, hfov: 70 });
 const viewport = player.getView();
 
+// Optional low-cost motion for visible previews.
+player.startAutoRotate(2);
+player.setRenderingActive(false); // suspend GPU work while offscreen
+player.setRenderingActive(true);
+player.stopAutoRotate();
+
 // Browser-resolution PNG from the current canvas.
 const localBlob = await player.takeSnapshot();
 

@@ -248,6 +248,38 @@ describe('Image360Player', () => {
     expect((player as any).velocityYaw).not.toBe(0);
   });
 
+  it('elastically caps extreme flick velocity', () => {
+    const player = new Image360Player({ container, imageUrl: 'test.jpg' });
+    const canvas = container.querySelector('canvas')!;
+
+    canvas.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, clientX: 10, clientY: 10 }));
+    canvas.dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, clientX: 10000, clientY: 10000 }));
+
+    expect(Math.abs((player as any).velocityYaw)).toBeLessThanOrEqual(0.18);
+    expect(Math.abs((player as any).velocityPitch)).toBeLessThanOrEqual(0.12);
+
+    canvas.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, clientX: 10000, clientY: 10000 }));
+    expect((player as any).isInertialGliding).toBe(true);
+  });
+
+  it('stops auto-rotation as soon as the user interacts', () => {
+    const player = new Image360Player({ container, imageUrl: 'test.jpg' });
+    const canvas = container.querySelector('canvas')!;
+
+    player.startAutoRotate(2);
+    canvas.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, clientX: 10, clientY: 10 }));
+    expect((player as any).autoRotateSpeed).toBe(0);
+    canvas.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, clientX: 10, clientY: 10 }));
+
+    player.startAutoRotate(2);
+    canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: 10 }));
+    expect((player as any).autoRotateSpeed).toBe(0);
+
+    player.startAutoRotate(2);
+    canvas.dispatchEvent(new MouseEvent('dblclick'));
+    expect((player as any).autoRotateSpeed).toBe(0);
+  });
+
   it('should emit click event with raycast coordinates on click', () => {
     const player = new Image360Player({
       container,
@@ -909,6 +941,31 @@ describe('Image360Player', () => {
     expect(player.getView()).toEqual({ yaw: -30, pitch: -85, hfov: 120 });
     expect(container.querySelector('.image360-controls')).not.toBeInTheDocument();
     expect(container.querySelector('.image360-compass')).not.toBeInTheDocument();
+  });
+
+  it('suspends rendering and supports controlled auto rotation', () => {
+    const player = new Image360Player({ container, imageUrl: 'test.jpg' });
+    const rendererMock = vi.mocked(THREE.WebGLRenderer);
+    const rendererInstance = rendererMock.mock.results[0].value;
+    const animationLoop = rendererInstance.setAnimationLoop.mock.calls[0][0];
+
+    player.setRenderingActive(false);
+    expect(rendererInstance.setAnimationLoop).toHaveBeenLastCalledWith(null);
+
+    player.startAutoRotate(3);
+    expect(rendererInstance.setAnimationLoop).toHaveBeenLastCalledWith(animationLoop);
+
+    const initialYaw = player.getYaw();
+    (player as any).lastFrameTime = Date.now() - 50;
+    (player as any).lastRenderTime = 0;
+    animationLoop();
+    expect(player.getYaw()).toBeGreaterThan(initialYaw);
+
+    player.stopAutoRotate();
+    const stoppedYaw = player.getYaw();
+    (player as any).lastFrameTime = Date.now() - 50;
+    animationLoop();
+    expect(player.getYaw()).toBe(stoppedYaw);
   });
 
   it('disposes stale nadir loads and clamps nadir rendering options', () => {

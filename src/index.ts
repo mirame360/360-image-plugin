@@ -1,6 +1,12 @@
 import * as THREE from 'three';
 import { strToU8, zipSync } from 'fflate';
 
+const MAX_INERTIA_YAW_DEGREES_PER_MS = 0.18;
+const MAX_INERTIA_PITCH_DEGREES_PER_MS = 0.12;
+const INERTIA_VELOCITY_SMOOTHING = 0.35;
+const INERTIA_RELEASE_TIMEOUT_MS = 90;
+const INERTIA_FRICTION_PER_FRAME = 0.88;
+
 export interface WebGL360ColorFilters {
   exposure?: number;
   brightness?: number;
@@ -176,6 +182,9 @@ export class Image360Player {
   private nadirMaterial?: THREE.MeshBasicMaterial;
   private nadirTexture?: THREE.Texture;
   private isDestroyed = false;
+  private isRenderingActive = false;
+  private autoRotateSpeed = 0;
+  private lastRenderTime = 0;
   
   private yaw = 0;
   private pitch = 0;
@@ -266,9 +275,9 @@ export class Image360Player {
     // Trigger initial layout resize
     this.resize();
     
-    // Start loop
-    this.lastFrameTime = Date.now();
-    this.renderer.setAnimationLoop(this.animate);
+    // Embedders can suspend this loop while the player is outside the
+    // viewport, releasing GPU time without destroying the scene.
+    this.startRendering();
   }
 
   private initThree(): void {
@@ -711,14 +720,26 @@ export class Image360Player {
   };
 
   private animate = (): void => {
-    if (!this.renderer) return;
+    if (!this.renderer || !this.isRenderingActive) return;
 
     const now = Date.now();
+    // A slowly rotating still image does not benefit from a 60 fps render
+    // loop. Limiting it to 15 fps substantially reduces showcase GPU work.
+    if (this.autoRotateSpeed !== 0 && !this.isDragging && !this.isInertialGliding && now - this.lastRenderTime < 1000 / 15) {
+      return;
+    }
     const dt = Math.min(50, now - this.lastFrameTime);
     this.lastFrameTime = now;
+    this.lastRenderTime = now;
+
+    if (this.autoRotateSpeed !== 0 && !this.isDragging && !this.isInertialGliding) {
+      this.yaw += this.autoRotateSpeed * (dt / 1000);
+      this.updateCameraRotation();
+      this.updateHotspots();
+    }
 
     if (this.isInertialGliding) {
-      const friction = Math.pow(0.92, dt / 16.6);
+      const friction = Math.pow(INERTIA_FRICTION_PER_FRAME, dt / 16.6);
       
       this.yaw += this.velocityYaw * dt;
       this.pitch += this.velocityPitch * dt;
@@ -744,6 +765,7 @@ export class Image360Player {
   // --- Input Handlers ---
 
   private onPointerDown = (e: PointerEvent): void => {
+    this.stopAutoRotate();
     const canvas = this.renderer.domElement;
     canvas.setPointerCapture(e.pointerId);
     
@@ -793,8 +815,16 @@ export class Image360Player {
       const targetYaw = this.dragStartYaw - deltaX * sensitivity;
       const targetPitch = Math.max(-85, Math.min(85, this.dragStartPitch + deltaY * sensitivity));
       
-      this.velocityYaw = (targetYaw - this.yaw) / dt;
-      this.velocityPitch = (targetPitch - this.pitch) / dt;
+      const sampledYawVelocity = this.applyElasticVelocityLimit(
+        (targetYaw - this.yaw) / dt,
+        MAX_INERTIA_YAW_DEGREES_PER_MS,
+      );
+      const sampledPitchVelocity = this.applyElasticVelocityLimit(
+        (targetPitch - this.pitch) / dt,
+        MAX_INERTIA_PITCH_DEGREES_PER_MS,
+      );
+      this.velocityYaw += (sampledYawVelocity - this.velocityYaw) * INERTIA_VELOCITY_SMOOTHING;
+      this.velocityPitch += (sampledPitchVelocity - this.velocityPitch) * INERTIA_VELOCITY_SMOOTHING;
 
       this.yaw = targetYaw;
       this.pitch = targetPitch;
@@ -862,6 +892,10 @@ export class Image360Player {
       this.initialPinchDistance = null;
 
       // Start inertia glide phase
+      if (Date.now() - this.lastPointerTime > INERTIA_RELEASE_TIMEOUT_MS) {
+        this.velocityYaw = 0;
+        this.velocityPitch = 0;
+      }
       const speed = Math.sqrt(this.velocityYaw * this.velocityYaw + this.velocityPitch * this.velocityPitch);
       if (speed > 0.05) {
         this.isInertialGliding = true;
@@ -880,6 +914,7 @@ export class Image360Player {
 
   private onWheel = (e: WheelEvent): void => {
     e.preventDefault();
+    this.stopAutoRotate();
     this.hfov += e.deltaY * 0.05;
     this.hfov = Math.max(30, Math.min(120, this.hfov));
     
@@ -888,6 +923,7 @@ export class Image360Player {
   };
 
   private onDoubleClick = (): void => {
+    this.stopAutoRotate();
     if (this.hfov < 50) {
       this.hfov = 90;
     } else {
@@ -921,6 +957,11 @@ export class Image360Player {
 
   private clampPitch(value: number): number {
     return Math.max(-85, Math.min(85, value));
+  }
+
+  private applyElasticVelocityLimit(value: number, limit: number): number {
+    if (!Number.isFinite(value)) return 0;
+    return limit * Math.tanh(value / limit);
   }
 
   private clampHfov(value: number): number {
@@ -977,6 +1018,7 @@ export class Image360Player {
     this.updateCameraRotation();
     this.updateCameraFov();
     this.updateHotspots();
+    this.triggerRedraw();
   }
 
   public setYaw(yaw: number): void {
@@ -989,6 +1031,24 @@ export class Image360Player {
 
   public setHfov(hfov: number): void {
     this.setView({ hfov });
+  }
+
+  public startAutoRotate(speed = 2): void {
+    if (!Number.isFinite(speed) || speed === 0) return;
+    this.autoRotateSpeed = speed;
+    this.startRendering();
+  }
+
+  public stopAutoRotate(): void {
+    this.autoRotateSpeed = 0;
+  }
+
+  public setRenderingActive(active: boolean): void {
+    if (active) {
+      this.startRendering();
+    } else {
+      this.stopRendering();
+    }
   }
 
   public setBrandingMode(mode: BrandingMode): void {
@@ -1458,9 +1518,7 @@ const player=new Image360Player.Image360Player({...config,container:document.get
 
   public destroy(): void {
     this.isDestroyed = true;
-    if (this.renderer) {
-      this.renderer.setAnimationLoop(null);
-    }
+    this.stopRendering();
     if (this.xrSession) {
       void this.xrSession.end();
       this.xrSession = null;
@@ -1492,7 +1550,23 @@ const player=new Image360Player.Image360Player({...config,container:document.get
   }
 
   private triggerRedraw(): void {
-    // With requestAnimationFrame / setAnimationLoop loop running continuously, redraw is implicit.
+    if (!this.isRenderingActive && this.renderer && this.scene && this.camera) {
+      this.renderer.render(this.scene, this.camera);
+    }
+  }
+
+  private startRendering(): void {
+    if (this.isDestroyed || !this.renderer || this.isRenderingActive) return;
+    this.isRenderingActive = true;
+    this.lastFrameTime = Date.now();
+    this.lastRenderTime = 0;
+    this.renderer.setAnimationLoop(this.animate);
+  }
+
+  private stopRendering(): void {
+    if (!this.renderer || !this.isRenderingActive) return;
+    this.renderer.setAnimationLoop(null);
+    this.isRenderingActive = false;
   }
 
   private checkWebGLSupport(): boolean {
