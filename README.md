@@ -1,5 +1,8 @@
 # 360 Image Player
 
+[![npm version](https://img.shields.io/npm/v/360-image-player.svg)](https://www.npmjs.com/package/360-image-player)
+[![license](https://img.shields.io/npm/l/360-image-player.svg)](LICENSE)
+
 A framework-agnostic equirectangular image player built with Three.js, TypeScript, and Vite.
 
 ## Features
