@@ -9,6 +9,10 @@ import {
   PlayerEventMap,
 } from '../index';
 
+const imageSourceSignature = (source: Image360PlayerOptions['imageUrl']): string => (
+  JSON.stringify(Array.isArray(source) ? source : [source])
+);
+
 export interface ReactImage360PlayerProps extends Omit<Image360PlayerOptions, 'container'> {
   className?: string;
   style?: React.CSSProperties;
@@ -68,7 +72,8 @@ export const ReactImage360Player = forwardRef<Image360Player | null, ReactImage3
     const containerRef = useRef<HTMLDivElement>(null);
     const [player, setPlayer] = useState<Image360Player | null>(null);
     const activeHotspotIdsRef = useRef<string[]>([]);
-    const appliedImageUrlRef = useRef(imageUrl);
+    const imageUrlSignature = imageSourceSignature(imageUrl);
+    const appliedImageUrlSignatureRef = useRef(imageUrlSignature);
     const appliedColorFiltersRef = useRef(colorFilters);
     const appliedNadirRef = useRef(nadir);
     const appliedBrandingModeRef = useRef(brandingMode);
@@ -96,7 +101,7 @@ export const ReactImage360Player = forwardRef<Image360Player | null, ReactImage3
       });
 
       setPlayer(newPlayer);
-      appliedImageUrlRef.current = imageUrl;
+      appliedImageUrlSignatureRef.current = imageSourceSignature(imageUrl);
       appliedColorFiltersRef.current = colorFilters;
       appliedNadirRef.current = nadir;
       appliedBrandingModeRef.current = brandingMode;
@@ -134,11 +139,11 @@ export const ReactImage360Player = forwardRef<Image360Player | null, ReactImage3
     ]);
 
     useEffect(() => {
-      if (player && imageUrl !== appliedImageUrlRef.current) {
+      if (player && imageUrlSignature !== appliedImageUrlSignatureRef.current) {
         player.setImageUrl(imageUrl);
-        appliedImageUrlRef.current = imageUrl;
+        appliedImageUrlSignatureRef.current = imageUrlSignature;
       }
-    }, [player, imageUrl]);
+    }, [player, imageUrl, imageUrlSignature]);
 
     useEffect(() => {
       if (player && colorFilters && colorFilters !== appliedColorFiltersRef.current) {

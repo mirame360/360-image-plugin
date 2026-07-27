@@ -18,9 +18,11 @@ export interface WebGL360ColorFilters {
   shadow?: number;
 }
 
+export type ImageSource = string | string[];
+
 export interface Image360PlayerOptions {
   container: HTMLElement;
-  imageUrl: string;
+  imageUrl: ImageSource;
   autoLoad?: boolean;
   showControls?: boolean;
   compass?: boolean;
@@ -112,7 +114,7 @@ export interface OfflineExportOptions {
 }
 
 export interface SerializablePlayerConfig {
-  imageUrl: string;
+  imageUrl: ImageSource;
   autoLoad: boolean;
   showControls: boolean;
   compass: boolean;
@@ -182,6 +184,7 @@ export class Image360Player {
   private nadirMaterial?: THREE.MeshBasicMaterial;
   private nadirTexture?: THREE.Texture;
   private isDestroyed = false;
+  private textureLoadGeneration = 0;
   private isRenderingActive = false;
   private autoRotateSpeed = 0;
   private lastRenderTime = 0;
@@ -236,6 +239,7 @@ export class Image360Player {
   constructor(options: Image360PlayerOptions) {
     this.options = {
       ...options,
+      imageUrl: this.normalizeImageSource(options.imageUrl),
       autoLoad: options.autoLoad !== false,
       showControls: options.showControls !== false,
       compass: options.compass === true,
@@ -269,7 +273,7 @@ export class Image360Player {
     }
 
     if (this.options.autoLoad) {
-      this.loadTexture(options.imageUrl);
+      this.loadTexture(this.options.imageUrl);
     }
     
     // Trigger initial layout resize
@@ -599,42 +603,80 @@ export class Image360Player {
     }
   }
 
-  private loadTexture(url: string): void {
+  private normalizeImageUrls(source: ImageSource): string[] {
+    const values = Array.isArray(source) ? source : [source];
+    const seen = new Set<string>();
+    return values.reduce<string[]>((urls, value) => {
+      if (typeof value !== 'string') return urls;
+      const normalized = value.trim();
+      if (!normalized || seen.has(normalized)) return urls;
+      seen.add(normalized);
+      urls.push(normalized);
+      return urls;
+    }, []);
+  }
+
+  private normalizeImageSource(source: ImageSource): ImageSource {
+    const urls = this.normalizeImageUrls(source);
+    return Array.isArray(source) ? urls : (urls[0] || '');
+  }
+
+  private imageSourcesEqual(left: ImageSource, right: ImageSource): boolean {
+    const leftUrls = this.normalizeImageUrls(left);
+    const rightUrls = this.normalizeImageUrls(right);
+    return leftUrls.length === rightUrls.length && leftUrls.every((url, index) => url === rightUrls[index]);
+  }
+
+  private loadTexture(source: ImageSource): void {
+    const urls = this.normalizeImageUrls(source);
+    const generation = ++this.textureLoadGeneration;
     const loader = new THREE.TextureLoader();
     loader.setCrossOrigin('anonymous');
-    loader.load(
-      url,
-      (texture) => {
-        if (this.isDestroyed) {
-          texture.dispose();
-          return;
-        }
-        // Keep panorama sampling in the encoded color space. The custom shader
-        // does not use Three's color-management chunks, so marking this as
-        // SRGBColorSpace makes neutral images render too dark.
-        texture.colorSpace = THREE.NoColorSpace;
-        texture.minFilter = THREE.LinearFilter;
-        texture.magFilter = THREE.LinearFilter;
-        texture.generateMipmaps = false;
-        
-        if (this.material) {
-          const oldTexture = this.material.uniforms.map.value;
-          if (oldTexture) {
-            oldTexture.dispose();
-          }
-          this.material.uniforms.map.value = texture;
-          this.material.needsUpdate = true;
-          this.triggerRedraw();
-        }
-        this.emit('load', undefined);
-      },
-      undefined,
-      (err) => {
-        console.error('Failed to load panorama image texture', err);
-        const errorObj = err instanceof Error ? err : new Error('Failed to load texture');
-        this.emit('error', errorObj);
+
+    const trySource = (index: number): void => {
+      if (this.isDestroyed || generation !== this.textureLoadGeneration) return;
+      if (index >= urls.length) {
+        const error = new Error(`Failed to load panorama texture from ${urls.length} image source${urls.length === 1 ? '' : 's'}`);
+        console.error('Failed to load panorama image texture', error);
+        this.emit('error', error);
+        return;
       }
-    );
+
+      loader.load(
+        urls[index],
+        (texture) => {
+          if (this.isDestroyed || generation !== this.textureLoadGeneration) {
+            texture.dispose();
+            return;
+          }
+          // Keep panorama sampling in the encoded color space. The custom shader
+          // does not use Three's color-management chunks, so marking this as
+          // SRGBColorSpace makes neutral images render too dark.
+          texture.colorSpace = THREE.NoColorSpace;
+          texture.minFilter = THREE.LinearFilter;
+          texture.magFilter = THREE.LinearFilter;
+          texture.generateMipmaps = false;
+
+          if (this.material) {
+            const oldTexture = this.material.uniforms.map.value;
+            if (oldTexture) {
+              oldTexture.dispose();
+            }
+            this.material.uniforms.map.value = texture;
+            this.material.needsUpdate = true;
+            this.triggerRedraw();
+          }
+          this.emit('load', undefined);
+        },
+        undefined,
+        () => {
+          if (this.isDestroyed || generation !== this.textureLoadGeneration) return;
+          trySource(index + 1);
+        }
+      );
+    };
+
+    trySource(0);
   }
 
   private updateCameraRotation(): void {
@@ -1001,10 +1043,11 @@ export class Image360Player {
     this.loadTexture(this.options.imageUrl);
   }
 
-  public setImageUrl(url: string): void {
-    if (this.options.imageUrl === url) return;
-    this.options.imageUrl = url;
-    this.loadTexture(url);
+  public setImageUrl(source: ImageSource): void {
+    const normalizedSource = this.normalizeImageSource(source);
+    if (this.imageSourcesEqual(this.options.imageUrl, normalizedSource)) return;
+    this.options.imageUrl = normalizedSource;
+    this.loadTexture(normalizedSource);
   }
 
   public getView(): Viewport {
@@ -1461,12 +1504,29 @@ export class Image360Player {
     const config = this.getSerializableConfig();
     const files: Record<string, Uint8Array> = {};
     const scriptUrl = options.playerScriptUrl || './360-image-player.standalone.umd.min.js';
-    let offlineImageUrl = config.imageUrl;
+    let offlineImageUrl: ImageSource = config.imageUrl;
     let offlineNadirUrl = config.nadir?.imageUrl;
 
     if (options.fetchAssets !== false) {
+      let panoramaExported = false;
+      for (const imageUrl of this.normalizeImageUrls(config.imageUrl)) {
+        try {
+          const response = await fetch(imageUrl);
+          if (!response.ok) continue;
+          const name = `assets/panorama${this.extensionFromUrl(imageUrl, '.jpg')}`;
+          files[name] = new Uint8Array(await response.arrayBuffer());
+          offlineImageUrl = name;
+          panoramaExported = true;
+          break;
+        } catch {
+          // Try the next configured panorama source.
+        }
+      }
+      if (!panoramaExported) {
+        throw new Error('Unable to export panorama from the configured image sources');
+      }
+
       const assets = [
-        { url: config.imageUrl, name: `assets/panorama${this.extensionFromUrl(config.imageUrl, '.jpg')}` },
         ...(config.nadir?.imageUrl
           ? [{ url: config.nadir.imageUrl, name: `assets/nadir${this.extensionFromUrl(config.nadir.imageUrl, '.png')}` }]
           : []),
@@ -1476,7 +1536,6 @@ export class Image360Player {
         const response = await fetch(asset.url);
         if (!response.ok) throw new Error(`Unable to export asset: ${asset.url}`);
         files[asset.name] = new Uint8Array(await response.arrayBuffer());
-        if (asset.url === config.imageUrl) offlineImageUrl = asset.name;
         if (asset.url === config.nadir?.imageUrl) offlineNadirUrl = asset.name;
       }
     }

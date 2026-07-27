@@ -45,6 +45,38 @@ test.describe('360 Image Player demo', () => {
     }
   });
 
+  test('loads the next ordered image URL when the primary source fails', async ({ page }) => {
+    await page.route('**/fallback-primary.webp', route => route.fulfill({ status: 415 }));
+    await page.route('**/fallback.jpeg', route => route.fulfill({
+      status: 200,
+      contentType: 'image/png',
+      body: TEST_PNG,
+    }));
+
+    await page.evaluate(() => {
+      const player = (window as typeof window & {
+        __image360Player?: {
+          load: () => void;
+          on: (name: string, callback: () => void) => void;
+          setImageUrl: (source: string[]) => void;
+        };
+      }).__image360Player;
+      if (!player) throw new Error('Demo player is unavailable');
+      const result = new Promise<string>((resolve) => {
+        player.on('load', () => resolve('loaded'));
+        player.on('error', () => resolve('error'));
+        player.setImageUrl(['/fallback-primary.webp', '/fallback.jpeg']);
+      });
+      (window as typeof window & { __fallbackResult?: Promise<string> }).__fallbackResult = result;
+    });
+
+    const result = await page.evaluate(() => (
+      (window as typeof window & { __fallbackResult?: Promise<string> }).__fallbackResult
+    ));
+    expect(result).toBe('loaded');
+    await expect(page.locator('#viewer canvas')).toBeVisible();
+  });
+
   test('updates MLS mode, color filters and serialized state', async ({ page }) => {
     await page.locator('#btn-branding').click();
     await expect(page.locator('#hud-mode')).toHaveText('unbranded');

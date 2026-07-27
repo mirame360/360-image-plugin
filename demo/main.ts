@@ -13,6 +13,7 @@ document.addEventListener('DOMContentLoaded', () => {
     compass: true,
     initialView: { yaw: 0, pitch: 0, hfov: 90 },
   });
+  (window as typeof window & { __image360Player?: Image360Player }).__image360Player = player;
 
   let brandingMode: 'branded' | 'unbranded' = 'branded';
   let panoramaObjectUrl: string | undefined;

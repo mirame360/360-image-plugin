@@ -28,7 +28,10 @@ import { Image360Player } from '360-image-player';
 
 const player = new Image360Player({
   container: document.getElementById('viewer')!,
-  imageUrl: 'https://example.com/panorama.jpg',
+  imageUrl: [
+    'https://example.com/panorama.webp',
+    'https://example.com/panorama.jpeg',
+  ],
   showControls: true,
   compass: true,
   initialView: { yaw: 20, pitch: 0, hfov: 80 },
@@ -56,6 +59,11 @@ player.on('addtocart', ({ product }) => {
   console.log(product);
 });
 ```
+
+`imageUrl` accepts either one URL or an ordered list. When a source cannot be
+loaded or decoded, the player tries the next URL and emits `error` only after
+all configured sources have failed. Existing integrations using a string do
+not need to change.
 
 ## Viewport And Snapshots
 
@@ -134,6 +142,7 @@ The ZIP contains the standalone player, panorama, optional nadir image, `config.
 
 | Option | Default | Description |
 | --- | --- | --- |
+| `imageUrl` | required | Panorama URL or ordered list of primary and fallback URLs. |
 | `autoLoad` | `true` | Load the panorama immediately. |
 | `showControls` | `true` | Render zoom and reset controls. |
 | `compass` | `false` | Render a heading compass. |

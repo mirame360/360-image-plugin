@@ -208,6 +208,20 @@ describe('ReactImage360Player', () => {
     expect(mockPlayerInstance.setImageUrl).toHaveBeenLastCalledWith('test1.jpg');
   });
 
+  it('updates an ordered image URL list only when its contents change', () => {
+    const { rerender } = render(
+      <ReactImage360Player imageUrl={['primary.webp', 'fallback.jpeg']} />
+    );
+    const mockPlayerInstance = vi.mocked(Image360Player).mock.results[0].value;
+
+    rerender(<ReactImage360Player imageUrl={['primary.webp', 'fallback.jpeg']} />);
+    expect(mockPlayerInstance.setImageUrl).not.toHaveBeenCalled();
+
+    rerender(<ReactImage360Player imageUrl={['primary.webp', 'mobile.jpeg']} />);
+    expect(mockPlayerInstance.setImageUrl).toHaveBeenCalledWith(['primary.webp', 'mobile.jpeg']);
+    expect(Image360Player).toHaveBeenCalledTimes(1);
+  });
+
   it('updates nadir, branding mode, and game state without recreating the player', () => {
     const initialNadir = { imageUrl: 'logo-1.png' };
     const { rerender } = render(

@@ -108,6 +108,86 @@ describe('Image360Player', () => {
     );
   });
 
+  it('tries ordered panorama sources until one loads', () => {
+    const attemptedUrls: string[] = [];
+    vi.mocked(THREE.TextureLoader).mockImplementationOnce(function (this: any) {
+      this.setCrossOrigin = vi.fn().mockReturnThis();
+      this.load = vi.fn((url, onLoad, _onProgress, onError) => {
+        attemptedUrls.push(url);
+        if (url.endsWith('.webp')) {
+          onError?.(new Error('unsupported image'));
+        } else {
+          onLoad?.({
+            dispose: vi.fn(),
+            colorSpace: '',
+            minFilter: 0,
+            magFilter: 0,
+            generateMipmaps: true,
+          });
+        }
+      });
+      return this;
+    } as any);
+
+    new Image360Player({
+      container,
+      imageUrl: [' panorama.webp ', 'panorama.webp', '', 'panorama.jpeg'],
+    });
+
+    expect(attemptedUrls).toEqual(['panorama.webp', 'panorama.jpeg']);
+  });
+
+  it('emits one error only after every panorama source fails', () => {
+    vi.mocked(THREE.TextureLoader).mockImplementationOnce(function (this: any) {
+      this.setCrossOrigin = vi.fn().mockReturnThis();
+      this.load = vi.fn((_url, _onLoad, _onProgress, onError) => {
+        onError?.(new Error('load failed'));
+      });
+      return this;
+    } as any);
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const player = new Image360Player({
+      container,
+      imageUrl: ['first.webp', 'second.jpeg'],
+      autoLoad: false,
+    });
+    const errorListener = vi.fn();
+    player.on('error', errorListener);
+
+    player.load();
+
+    expect(errorListener).toHaveBeenCalledOnce();
+    expect(errorListener.mock.calls[0][0]).toMatchObject({
+      message: 'Failed to load panorama texture from 2 image sources',
+    });
+    consoleError.mockRestore();
+  });
+
+  it('ignores a late texture result after the ordered source list changes', () => {
+    const completions: Array<(texture: any) => void> = [];
+    const deferredLoader = function (this: any) {
+        this.setCrossOrigin = vi.fn().mockReturnThis();
+        this.load = vi.fn((_url, onLoad) => {
+          completions.push(onLoad);
+        });
+        return this;
+      } as any;
+    vi.mocked(THREE.TextureLoader)
+      .mockImplementationOnce(deferredLoader)
+      .mockImplementationOnce(deferredLoader);
+    const player = new Image360Player({ container, imageUrl: ['old.webp', 'old.jpeg'], autoLoad: false });
+    const oldTexture = { dispose: vi.fn(), colorSpace: '', minFilter: 0, magFilter: 0, generateMipmaps: true };
+    const newTexture = { dispose: vi.fn(), colorSpace: '', minFilter: 0, magFilter: 0, generateMipmaps: true };
+
+    player.load();
+    player.setImageUrl(['new.webp', 'new.jpeg']);
+    completions[1](newTexture);
+    completions[0](oldTexture);
+
+    expect((player as any).material.uniforms.map.value).toBe(newTexture);
+    expect(oldTexture.dispose).toHaveBeenCalledOnce();
+  });
+
   it('keeps panorama textures in raw color space for neutral rendering', () => {
     new Image360Player({
       container,
@@ -885,7 +965,29 @@ describe('Image360Player', () => {
 
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false }));
     await expect(player.exportOffline({ playerScriptUrl: '/player.js' }))
-      .rejects.toThrow('Unable to export asset');
+      .rejects.toThrow('Unable to export panorama');
+  });
+
+  it('exports the first reachable panorama source from an ordered list', async () => {
+    const player = new Image360Player({
+      container,
+      imageUrl: ['https://cdn.example.com/pano.webp', 'https://cdn.example.com/pano.jpeg'],
+    });
+    const fetchMock = vi.fn().mockImplementation((url: string) => Promise.resolve({
+      ok: !url.endsWith('.webp'),
+      arrayBuffer: vi.fn().mockResolvedValue(new TextEncoder().encode(url).buffer),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const blob = await player.exportOffline({
+      playerScriptUrl: 'https://cdn.example.com/player.js',
+      fetchAssets: true,
+    });
+    const archive = unzipSync(new Uint8Array(await blob.arrayBuffer()));
+    const config = JSON.parse(strFromU8(archive['config.json']));
+
+    expect(Object.keys(archive)).toContain('assets/panorama.jpeg');
+    expect(config.imageUrl).toBe('assets/panorama.jpeg');
   });
 
   it('disposes asynchronously loaded textures after destruction', () => {
