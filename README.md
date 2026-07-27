@@ -13,6 +13,10 @@ A framework-agnostic equirectangular image player built with Three.js, TypeScrip
 - React wrapper with typed callbacks.
 - GPL-3.0 licensed.
 
+## Hosting your source media
+
+This player renders whatever equirectangular image URL you give it — you still need somewhere to upload, store, and serve the actual panorama files. [Mirame360](https://mirame360.com) is a free 360° photo/video hosting platform built by the same team: upload once, get optimized web-ready URLs and secure embeds, and drop them straight into this player (or use the [Mirame360 WordPress plugin](https://github.com/mirame360/mirame360-wordpress-embed) if your site runs WordPress).
+
 ## Installation
 
 ```bash
