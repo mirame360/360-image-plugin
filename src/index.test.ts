@@ -36,6 +36,31 @@ describe('Image360Player', () => {
     expect(player.getHfov()).toBe(90);
   });
 
+  it('claims touch gestures so mobile drags pan the panorama instead of the page', () => {
+    new Image360Player({
+      container,
+      imageUrl: 'test.jpg'
+    });
+
+    const canvas = container.querySelector('canvas');
+    expect(container.style.touchAction).toBe('none');
+    expect(canvas?.style.touchAction).toBe('none');
+  });
+
+  it('resets to the configured initial view', () => {
+    const player = new Image360Player({
+      container,
+      imageUrl: 'test.jpg',
+      initialView: { yaw: 15, pitch: -5, hfov: 105 },
+    });
+    player.setView({ yaw: 60, pitch: 20, hfov: 50 });
+
+    const resetButton = container.querySelector<HTMLButtonElement>('[aria-label="Reset view"]');
+    resetButton?.click();
+
+    expect(player.getView()).toEqual({ yaw: 15, pitch: -5, hfov: 105 });
+  });
+
   it('should pass custom options and initialize color filters', () => {
     const player = new Image360Player({
       container,

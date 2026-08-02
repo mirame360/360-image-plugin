@@ -1,6 +1,6 @@
 {
   "name": "360-image-player",
-  "version": "0.2.0",
+  "version": "0.2.2",
   "description": "Framework-agnostic Three.js player for equirectangular 360 images.",
   "type": "module",
   "license": "GPL-3.0-only",

@@ -192,6 +192,7 @@ export class Image360Player {
   private yaw = 0;
   private pitch = 0;
   private hfov = 90;
+  private initialView: Viewport;
   
   private isDragging = false;
   private dragStartX = 0;
@@ -250,9 +251,14 @@ export class Image360Player {
       allowExternalLinks: options.allowExternalLinks !== false,
     };
     this.container = options.container;
-    this.yaw = options.initialView?.yaw ?? 0;
-    this.pitch = this.clampPitch(options.initialView?.pitch ?? 0);
-    this.hfov = this.clampHfov(options.initialView?.hfov ?? 90);
+    this.initialView = {
+      yaw: options.initialView?.yaw ?? 0,
+      pitch: this.clampPitch(options.initialView?.pitch ?? 0),
+      hfov: this.clampHfov(options.initialView?.hfov ?? 90),
+    };
+    this.yaw = this.initialView.yaw;
+    this.pitch = this.initialView.pitch;
+    this.hfov = this.initialView.hfov;
 
     if (options.colorFilters) {
       this.filters = { ...this.filters, ...options.colorFilters };
@@ -385,12 +391,17 @@ export class Image360Player {
     this.container.innerHTML = '';
     this.container.style.position = 'relative';
     this.container.style.overflow = 'hidden';
+    // Pointer Events only keep receiving touch moves when the browser knows
+    // that this surface owns the gesture. Without this, mobile browsers pan
+    // the embedding page and cancel the panorama drag.
+    this.container.style.touchAction = 'none';
 
     // Style the canvas
     const canvas = this.renderer.domElement;
     canvas.style.width = '100%';
     canvas.style.height = '100%';
     canvas.style.display = 'block';
+    canvas.style.touchAction = 'none';
     this.container.appendChild(canvas);
 
     // Hotspots overlay container
@@ -428,7 +439,7 @@ export class Image360Player {
     const controlsConfig = [
       { label: 'Zoom in', text: '+', action: () => this.setHfov(this.hfov - 10) },
       { label: 'Zoom out', text: '−', action: () => this.setHfov(this.hfov + 10) },
-      { label: 'Reset view', text: '↺', action: () => this.setView({ yaw: 0, pitch: 0, hfov: 90 }) },
+      { label: 'Reset view', text: '↺', action: () => this.setView(this.initialView) },
     ];
 
     controlsConfig.forEach(({ label, text, action }) => {

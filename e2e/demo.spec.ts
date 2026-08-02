@@ -28,6 +28,8 @@ test.describe('360 Image Player demo', () => {
   test('renders WebGL, controls, compass and updates the viewport', async ({ page }) => {
     const canvas = page.locator('#viewer canvas');
     await expect(canvas).toBeVisible();
+    await expect(page.locator('#viewer')).toHaveCSS('touch-action', 'none');
+    await expect(canvas).toHaveCSS('touch-action', 'none');
     await expect(page.getByRole('button', { name: 'Zoom in' })).toBeVisible();
     await expect(page.getByLabel('Panorama heading')).toBeVisible();
 
