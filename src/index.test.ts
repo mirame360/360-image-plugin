@@ -2,6 +2,18 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as THREE from 'three';
 import { strFromU8, unzipSync } from 'fflate';
 import { Image360Player } from './index';
+import { directionAtScreenPoint, type Direction } from './projection';
+
+function angleBetween(a: Direction, b: Direction): number {
+  const dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const length = Math.hypot(...a) * Math.hypot(...b);
+  return Math.acos(Math.max(-1, Math.min(1, dot / length))) * 180 / Math.PI;
+}
+
+function setContainerSize(element: HTMLElement, width: number, height: number): void {
+  Object.defineProperty(element, 'clientWidth', { value: width, configurable: true });
+  Object.defineProperty(element, 'clientHeight', { value: height, configurable: true });
+}
 
 describe('Image360Player', () => {
   let container: HTMLDivElement;
@@ -350,7 +362,7 @@ describe('Image360Player', () => {
     canvas.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, clientX: 150, clientY: 100 }));
 
     expect((player as any).isInertialGliding).toBe(true);
-    expect((player as any).velocityYaw).not.toBe(0);
+    expect((player as any).velocityX).not.toBe(0);
   });
 
   it('elastically caps extreme flick velocity', () => {
@@ -360,11 +372,224 @@ describe('Image360Player', () => {
     canvas.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, clientX: 10, clientY: 10 }));
     canvas.dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, clientX: 10000, clientY: 10000 }));
 
-    expect(Math.abs((player as any).velocityYaw)).toBeLessThanOrEqual(0.18);
-    expect(Math.abs((player as any).velocityPitch)).toBeLessThanOrEqual(0.12);
+    expect(Math.hypot((player as any).velocityX, (player as any).velocityY)).toBeLessThanOrEqual(1.6);
 
     canvas.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, clientX: 10000, clientY: 10000 }));
     expect((player as any).isInertialGliding).toBe(true);
+  });
+
+  it('glides by carrying the released point along the flick direction', () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1000);
+    const player = new Image360Player({ container, imageUrl: 'test.jpg' });
+    const canvas = container.querySelector('canvas')!;
+    const size = { width: 800, height: 600 };
+    const grabbed = directionAtScreenPoint(player.getView(), { x: 400, y: 300 }, size);
+
+    canvas.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, clientX: 400, clientY: 300 }));
+    now.mockReturnValue(1010);
+    canvas.dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, clientX: 430, clientY: 310 }));
+    now.mockReturnValue(1020);
+    canvas.dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, clientX: 460, clientY: 320 }));
+    now.mockReturnValue(1025);
+    canvas.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, clientX: 460, clientY: 320 }));
+    expect((player as any).isInertialGliding).toBe(true);
+
+    now.mockReturnValue(1041);
+    (player as any).animate();
+
+    const glide = (player as any).glidePointer;
+    expect(glide.clientX).toBeGreaterThan(460);
+    expect(glide.clientY).toBeGreaterThan(320);
+    expect(angleBetween(directionAtScreenPoint(player.getView(), { x: glide.clientX, y: glide.clientY }, size), grabbed))
+      .toBeLessThan(1e-4);
+    now.mockRestore();
+  });
+
+  it('glides along the flick instead of extrapolating the yaw rate near the nadir', () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1000);
+    const player = new Image360Player({ container, imageUrl: 'test.jpg', initialView: { pitch: -60 } });
+    const canvas = container.querySelector('canvas')!;
+    // Looking 60 degrees down, the nadir is drawn at (400, 531). Pass just
+    // above it, where yaw turns fast, then flick away from it.
+    const path = [[340, 511], [380, 511], [420, 511], [440, 491], [460, 471]];
+
+    canvas.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, clientX: 340, clientY: 511 }));
+    path.slice(1).forEach(([x, y], index) => {
+      now.mockReturnValue(1010 + index * 10);
+      canvas.dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, clientX: x, clientY: y }));
+    });
+    now.mockReturnValue(1045);
+    canvas.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, clientX: 460, clientY: 471 }));
+    expect((player as any).isInertialGliding).toBe(true);
+
+    // Moving away from the nadir barely turns the view. Carrying on the yaw
+    // rate sampled next to the nadir used to spin it by about 20 degrees.
+    const releasedYaw = (player as any).yaw;
+    let time = 1045;
+    while ((player as any).isInertialGliding && time < 3000) {
+      time += 16;
+      now.mockReturnValue(time);
+      (player as any).animate();
+    }
+    expect((player as any).isInertialGliding).toBe(false);
+    expect(Math.abs((player as any).yaw - releasedYaw)).toBeLessThan(3);
+    now.mockRestore();
+  });
+
+  it('maps pointers through the canvas box when the player is CSS-scaled', () => {
+    setContainerSize(container, 800, 600);
+    const player = new Image360Player({ container, imageUrl: 'test.jpg', initialView: { yaw: 20, pitch: 10 } });
+    const canvas = container.querySelector('canvas')!;
+    // Rendered at half size, 100px from the left and 50px from the top.
+    vi.spyOn(canvas, 'getBoundingClientRect').mockReturnValue({
+      left: 100, top: 50, width: 400, height: 300, right: 500, bottom: 350, x: 100, y: 50, toJSON: () => ({}),
+    } as DOMRect);
+    const size = { width: 800, height: 600 };
+    const grabbed = directionAtScreenPoint(player.getView(), { x: 650, y: 420 }, size);
+
+    canvas.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, clientX: 100 + 325, clientY: 50 + 210 }));
+    canvas.dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, clientX: 100 + 150, clientY: 50 + 160 }));
+
+    expect(angleBetween(directionAtScreenPoint(player.getView(), { x: 300, y: 320 }, size), grabbed)).toBeLessThan(1e-4);
+  });
+
+  it('keeps the grabbed panorama point under the pointer while dragging', () => {
+    const player = new Image360Player({
+      container,
+      imageUrl: 'test.jpg',
+      initialView: { yaw: 20, pitch: 10, hfov: 100 },
+    });
+    const canvas = container.querySelector('canvas')!;
+    const size = { width: 800, height: 600 };
+    const grabbed = directionAtScreenPoint(player.getView(), { x: 650, y: 420 }, size);
+
+    canvas.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, clientX: 650, clientY: 420 }));
+    for (const [x, y] of [[560, 380], [300, 320], [150, 250], [600, 400]]) {
+      canvas.dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, clientX: x, clientY: y }));
+      expect(angleBetween(directionAtScreenPoint(player.getView(), { x, y }, size), grabbed)).toBeLessThan(1e-4);
+    }
+  });
+
+  it('tracks the pointer on a portrait phone-sized player', () => {
+    setContainerSize(container, 390, 844);
+    const player = new Image360Player({ container, imageUrl: 'test.jpg', initialView: { hfov: 110 } });
+    const canvas = container.querySelector('canvas')!;
+    const size = { width: 390, height: 844 };
+    const grabbed = directionAtScreenPoint(player.getView(), { x: 300, y: 200 }, size);
+
+    canvas.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, clientX: 300, clientY: 200 }));
+    canvas.dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, clientX: 80, clientY: 330 }));
+
+    expect(angleBetween(directionAtScreenPoint(player.getView(), { x: 80, y: 330 }, size), grabbed)).toBeLessThan(1e-4);
+  });
+
+  it('stops at the pitch limit and responds as soon as the drag reverses', () => {
+    const player = new Image360Player({ container, imageUrl: 'test.jpg', initialView: { pitch: 75 } });
+    const canvas = container.querySelector('canvas')!;
+
+    canvas.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, clientX: 400, clientY: 300 }));
+    canvas.dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, clientX: 400, clientY: 590 }));
+    expect(player.getPitch()).toBe(85);
+
+    canvas.dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, clientX: 400, clientY: 570 }));
+    expect(player.getPitch()).toBeLessThan(85);
+    expect(player.getPitch()).toBeGreaterThan(80);
+  });
+
+  it('pinch zooms by the finger spread and keeps the point between the fingers', () => {
+    const player = new Image360Player({ container, imageUrl: 'test.jpg', initialView: { yaw: 30, pitch: 10 } });
+    const canvas = container.querySelector('canvas')!;
+    const size = { width: 800, height: 600 };
+    const held = directionAtScreenPoint(player.getView(), { x: 400, y: 300 }, size);
+
+    canvas.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, clientX: 300, clientY: 300 }));
+    canvas.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 2, clientX: 500, clientY: 300 }));
+    // Spread grows 200px -> 300px while the midpoint moves to (450, 340).
+    canvas.dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, clientX: 300, clientY: 340 }));
+    canvas.dispatchEvent(new PointerEvent('pointermove', { pointerId: 2, clientX: 600, clientY: 340 }));
+
+    const expectedHfov = 2 * Math.atan(Math.tan(Math.PI / 4) * 200 / 300) * 180 / Math.PI;
+    expect(player.getHfov()).toBeCloseTo(expectedHfov);
+    expect(angleBetween(directionAtScreenPoint(player.getView(), { x: 450, y: 340 }, size), held)).toBeLessThan(1e-4);
+  });
+
+  it('pans with two fingers and hands over to one finger without a jump', () => {
+    const player = new Image360Player({ container, imageUrl: 'test.jpg' });
+    const canvas = container.querySelector('canvas')!;
+    const size = { width: 800, height: 600 };
+
+    canvas.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, clientX: 300, clientY: 300 }));
+    canvas.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 2, clientX: 500, clientY: 300 }));
+    canvas.dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, clientX: 200, clientY: 300 }));
+    canvas.dispatchEvent(new PointerEvent('pointermove', { pointerId: 2, clientX: 400, clientY: 300 }));
+    expect(player.getHfov()).toBeCloseTo(90);
+    expect(player.getYaw()).toBeGreaterThan(10);
+
+    canvas.dispatchEvent(new PointerEvent('pointerup', { pointerId: 2, clientX: 400, clientY: 300 }));
+    const viewAfterLift = player.getView();
+    const held = directionAtScreenPoint(viewAfterLift, { x: 200, y: 300 }, size);
+
+    canvas.dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, clientX: 260, clientY: 280 }));
+    expect(angleBetween(directionAtScreenPoint(player.getView(), { x: 260, y: 280 }, size), held)).toBeLessThan(1e-4);
+  });
+
+  it('responds immediately when a pinch reverses past the zoom limit', () => {
+    const player = new Image360Player({ container, imageUrl: 'test.jpg' });
+    const canvas = container.querySelector('canvas')!;
+
+    canvas.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, clientX: 350, clientY: 300 }));
+    canvas.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 2, clientX: 450, clientY: 300 }));
+    canvas.dispatchEvent(new PointerEvent('pointermove', { pointerId: 2, clientX: 1050, clientY: 300 }));
+    expect(player.getHfov()).toBe(30);
+
+    canvas.dispatchEvent(new PointerEvent('pointermove', { pointerId: 2, clientX: 900, clientY: 300 }));
+    expect(player.getHfov()).toBeGreaterThan(30);
+  });
+
+  it('zooms toward the cursor on wheel and double-click', () => {
+    const player = new Image360Player({ container, imageUrl: 'test.jpg', initialView: { yaw: -40, pitch: 15 } });
+    const canvas = container.querySelector('canvas')!;
+    const size = { width: 800, height: 600 };
+
+    const underWheel = directionAtScreenPoint(player.getView(), { x: 650, y: 200 }, size);
+    canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: -400, clientX: 650, clientY: 200 }));
+    expect(player.getHfov()).toBeCloseTo(70);
+    expect(angleBetween(directionAtScreenPoint(player.getView(), { x: 650, y: 200 }, size), underWheel)).toBeLessThan(1e-4);
+
+    const underClick = directionAtScreenPoint(player.getView(), { x: 120, y: 480 }, size);
+    canvas.dispatchEvent(new MouseEvent('dblclick', { clientX: 120, clientY: 480 }));
+    expect(player.getHfov()).toBe(40);
+    expect(angleBetween(directionAtScreenPoint(player.getView(), { x: 120, y: 480 }, size), underClick)).toBeLessThan(1e-4);
+  });
+
+  it('keeps the double-clicked point under the cursor near the screen edge', () => {
+    // Zooming in from 90 to 40 degrees here turns the camera further than
+    // any drag step, which the drag rule would refuse.
+    const player = new Image360Player({ container, imageUrl: 'test.jpg', initialView: { pitch: -55 } });
+    const canvas = container.querySelector('canvas')!;
+    const size = { width: 800, height: 600 };
+    const underClick = directionAtScreenPoint(player.getView(), { x: 790, y: 590 }, size);
+
+    canvas.dispatchEvent(new MouseEvent('dblclick', { clientX: 790, clientY: 590 }));
+
+    expect(player.getHfov()).toBe(40);
+    expect(angleBetween(directionAtScreenPoint(player.getView(), { x: 790, y: 590 }, size), underClick)).toBeLessThan(1e-4);
+  });
+
+  it('stops an inertia glide before zooming so the cursor point stays put', () => {
+    const player = new Image360Player({ container, imageUrl: 'test.jpg' });
+    const canvas = container.querySelector('canvas')!;
+    canvas.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, clientX: 100, clientY: 100 }));
+    canvas.dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, clientX: 150, clientY: 100 }));
+    canvas.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, clientX: 150, clientY: 100 }));
+    expect((player as any).isInertialGliding).toBe(true);
+
+    canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, clientX: 600, clientY: 200 }));
+
+    expect((player as any).isInertialGliding).toBe(false);
+    const view = player.getView();
+    (player as any).animate();
+    expect(player.getView()).toEqual(view);
   });
 
   it('stops auto-rotation as soon as the user interacts', () => {

@@ -8,6 +8,7 @@ A framework-agnostic equirectangular image player built with Three.js, TypeScrip
 ## Features
 
 - Mouse, touch, pinch, inertia, zoom controls, compass, and WebXR.
+- Gestures stay anchored to the panorama: the point you grab, pinch or zoom on stays under the pointer, including near the poles.
 - Runtime color filters and configurable nadir covers.
 - Typed hotspots for links, quizzes, clues, locked content, and products.
 - Branded and MLS-friendly unbranded rendering modes.
