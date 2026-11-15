@@ -213,6 +213,9 @@ export class Image360Player {
   private activePointers = new Map<number, { clientX: number; clientY: number }>();
   private initialPinchDistance: number | null = null;
   private initialPinchHfov = 90;
+  // Panorama direction between the two fingers. The pinch keeps it under
+  // their midpoint, so the fingers zoom into what they hold and can pan.
+  private pinchAnchor: Direction | null = null;
   
   private hotspots: ActiveHotSpot[] = [];
   private gameState: GameState = {
@@ -896,13 +899,30 @@ export class Image360Player {
       this.clickStartTime = Date.now();
     } else if (this.activePointers.size === 2 && this.options.touchPanAndZoom !== false) {
       this.isDragging = false;
-      const pointers = Array.from(this.activePointers.values());
-      const dx = pointers[0].clientX - pointers[1].clientX;
-      const dy = pointers[0].clientY - pointers[1].clientY;
-      this.initialPinchDistance = Math.sqrt(dx * dx + dy * dy);
-      this.initialPinchHfov = this.hfov;
+      this.dragAnchor = null;
+      this.startPinch();
     }
   };
+
+  private getPinchGeometry(): { center: { clientX: number; clientY: number }; distance: number } {
+    const pointers = Array.from(this.activePointers.values());
+    const dx = pointers[0].clientX - pointers[1].clientX;
+    const dy = pointers[0].clientY - pointers[1].clientY;
+    return {
+      center: {
+        clientX: (pointers[0].clientX + pointers[1].clientX) / 2,
+        clientY: (pointers[0].clientY + pointers[1].clientY) / 2,
+      },
+      distance: Math.sqrt(dx * dx + dy * dy),
+    };
+  }
+
+  private startPinch(): void {
+    const { center, distance } = this.getPinchGeometry();
+    this.initialPinchDistance = distance;
+    this.initialPinchHfov = this.hfov;
+    this.pinchAnchor = this.getDirectionAtPointer(center);
+  }
 
   private onPointerMove = (e: PointerEvent): void => {
     if (!this.activePointers.has(e.pointerId)) return;
@@ -943,17 +963,41 @@ export class Image360Player {
 
       this.updateCameraRotation();
       this.updateHotspots();
-    } else if (this.activePointers.size === 2 && this.initialPinchDistance !== null) {
-      const pointers = Array.from(this.activePointers.values());
-      const dx = pointers[0].clientX - pointers[1].clientX;
-      const dy = pointers[0].clientY - pointers[1].clientY;
-      const distance = Math.sqrt(dx * dx + dy * dy);
-      
-      const factor = this.initialPinchDistance / distance;
-      this.hfov = this.initialPinchHfov * factor;
-      this.hfov = Math.max(30, Math.min(120, this.hfov));
-      
+    } else if (this.activePointers.size === 2 && this.initialPinchDistance !== null && this.pinchAnchor) {
+      const { center, distance } = this.getPinchGeometry();
+
+      if (distance > 0 && this.initialPinchDistance > 0) {
+        // Content on screen scales with 1 / tan(hfov / 2). Scaling the
+        // tangent by the finger spread makes the image grow exactly as far
+        // as the fingers move apart; scaling hfov in degrees does not.
+        const initialTan = Math.tan(THREE.MathUtils.degToRad(this.initialPinchHfov) / 2);
+        const requestedHfov = THREE.MathUtils.radToDeg(
+          2 * Math.atan(initialTan * this.initialPinchDistance / distance),
+        );
+        this.hfov = this.clampHfov(requestedHfov);
+        // Past a zoom limit, restart from here so pinching back responds
+        // immediately instead of first crossing a dead zone.
+        if (this.hfov !== requestedHfov) {
+          this.initialPinchDistance = distance;
+          this.initialPinchHfov = this.hfov;
+        }
+      }
+
+      const solved = solveViewForAnchor(
+        { yaw: this.yaw, pitch: this.pitch, hfov: this.hfov },
+        this.getPointerPosition(center),
+        this.getViewportSize(),
+        this.pinchAnchor,
+        MAX_PITCH_DEGREES,
+      );
+      this.yaw = solved.yaw;
+      this.pitch = solved.pitch;
+      if (solved.limited) {
+        this.pinchAnchor = this.getDirectionAtPointer(center);
+      }
+
       this.updateCameraFov();
+      this.updateCameraRotation();
       this.updateHotspots();
     }
 
@@ -1002,6 +1046,7 @@ export class Image360Player {
       this.isDragging = false;
       this.dragAnchor = null;
       this.initialPinchDistance = null;
+      this.pinchAnchor = null;
 
       // Start inertia glide phase
       if (Date.now() - this.lastPointerTime > INERTIA_RELEASE_TIMEOUT_MS) {
@@ -1022,6 +1067,12 @@ export class Image360Player {
       // that lifted.
       this.lastPointerX = pointer.clientX;
       this.lastPointerY = pointer.clientY;
+      this.initialPinchDistance = null;
+      this.pinchAnchor = null;
+    } else if (this.activePointers.size === 2 && this.initialPinchDistance !== null) {
+      // A third finger lifted: pinch on with the two that remain, starting
+      // from where they are now so the view does not jump.
+      this.startPinch();
     }
   };
 

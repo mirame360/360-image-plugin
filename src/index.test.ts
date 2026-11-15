@@ -496,6 +496,56 @@ describe('Image360Player', () => {
     expect(player.getPitch()).toBeGreaterThan(80);
   });
 
+  it('pinch zooms by the finger spread and keeps the point between the fingers', () => {
+    const player = new Image360Player({ container, imageUrl: 'test.jpg', initialView: { yaw: 30, pitch: 10 } });
+    const canvas = container.querySelector('canvas')!;
+    const size = { width: 800, height: 600 };
+    const held = directionAtScreenPoint(player.getView(), { x: 400, y: 300 }, size);
+
+    canvas.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, clientX: 300, clientY: 300 }));
+    canvas.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 2, clientX: 500, clientY: 300 }));
+    // Spread grows 200px -> 300px while the midpoint moves to (450, 340).
+    canvas.dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, clientX: 300, clientY: 340 }));
+    canvas.dispatchEvent(new PointerEvent('pointermove', { pointerId: 2, clientX: 600, clientY: 340 }));
+
+    const expectedHfov = 2 * Math.atan(Math.tan(Math.PI / 4) * 200 / 300) * 180 / Math.PI;
+    expect(player.getHfov()).toBeCloseTo(expectedHfov);
+    expect(angleBetween(directionAtScreenPoint(player.getView(), { x: 450, y: 340 }, size), held)).toBeLessThan(1e-4);
+  });
+
+  it('pans with two fingers and hands over to one finger without a jump', () => {
+    const player = new Image360Player({ container, imageUrl: 'test.jpg' });
+    const canvas = container.querySelector('canvas')!;
+    const size = { width: 800, height: 600 };
+
+    canvas.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, clientX: 300, clientY: 300 }));
+    canvas.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 2, clientX: 500, clientY: 300 }));
+    canvas.dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, clientX: 200, clientY: 300 }));
+    canvas.dispatchEvent(new PointerEvent('pointermove', { pointerId: 2, clientX: 400, clientY: 300 }));
+    expect(player.getHfov()).toBeCloseTo(90);
+    expect(player.getYaw()).toBeGreaterThan(10);
+
+    canvas.dispatchEvent(new PointerEvent('pointerup', { pointerId: 2, clientX: 400, clientY: 300 }));
+    const viewAfterLift = player.getView();
+    const held = directionAtScreenPoint(viewAfterLift, { x: 200, y: 300 }, size);
+
+    canvas.dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, clientX: 260, clientY: 280 }));
+    expect(angleBetween(directionAtScreenPoint(player.getView(), { x: 260, y: 280 }, size), held)).toBeLessThan(1e-4);
+  });
+
+  it('responds immediately when a pinch reverses past the zoom limit', () => {
+    const player = new Image360Player({ container, imageUrl: 'test.jpg' });
+    const canvas = container.querySelector('canvas')!;
+
+    canvas.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, clientX: 350, clientY: 300 }));
+    canvas.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 2, clientX: 450, clientY: 300 }));
+    canvas.dispatchEvent(new PointerEvent('pointermove', { pointerId: 2, clientX: 1050, clientY: 300 }));
+    expect(player.getHfov()).toBe(30);
+
+    canvas.dispatchEvent(new PointerEvent('pointermove', { pointerId: 2, clientX: 900, clientY: 300 }));
+    expect(player.getHfov()).toBeGreaterThan(30);
+  });
+
   it('stops auto-rotation as soon as the user interacts', () => {
     const player = new Image360Player({ container, imageUrl: 'test.jpg' });
     const canvas = container.querySelector('canvas')!;
