@@ -47,6 +47,54 @@ test.describe('360 Image Player demo', () => {
     }
   });
 
+  test('keeps the grabbed panorama point under the pointer while dragging', async ({ page }) => {
+    const canvas = page.locator('#viewer canvas');
+    // On phone layouts the viewer sits below the control panel.
+    await canvas.scrollIntoViewIfNeeded();
+    const box = await canvas.boundingBox();
+    expect(box).not.toBeNull();
+    if (!box) return;
+
+    // The player's click event raycasts the panorama under the pointer, so
+    // clicking before and after the drag reports where the grabbed point is.
+    await page.evaluate(() => {
+      const scope = window as typeof window & {
+        __image360Player?: {
+          on: (name: string, callback: (event: { yaw: number; pitch: number }) => void) => void;
+        };
+        __clicks?: { yaw: number; pitch: number }[];
+      };
+      if (!scope.__image360Player) throw new Error('Demo player is unavailable');
+      scope.__clicks = [];
+      scope.__image360Player.on('click', ({ yaw, pitch }) => scope.__clicks?.push({ yaw, pitch }));
+    });
+
+    // Below the horizon, away from the demo hotspots.
+    const start = { x: box.x + box.width * 0.65, y: box.y + box.height * 0.75 };
+    const end = { x: box.x + box.width * 0.35, y: box.y + box.height * 0.55 };
+
+    await page.mouse.click(start.x, start.y);
+    // Wait out the double-click interval so the drag is not read as one.
+    await page.waitForTimeout(600);
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    await page.mouse.move(end.x, end.y, { steps: 8 });
+    // Hold still past the inertia release window so the view does not glide.
+    await page.waitForTimeout(200);
+    await page.mouse.up();
+    await page.waitForTimeout(600);
+    await page.mouse.click(end.x, end.y);
+
+    const clicks = await page.evaluate(() => (
+      (window as typeof window & { __clicks?: { yaw: number; pitch: number }[] }).__clicks
+    ));
+    expect(clicks).toHaveLength(2);
+    if (!clicks) return;
+    const yawDifference = ((clicks[1].yaw - clicks[0].yaw + 540) % 360) - 180;
+    expect(Math.abs(yawDifference)).toBeLessThan(0.5);
+    expect(Math.abs(clicks[1].pitch - clicks[0].pitch)).toBeLessThan(0.5);
+  });
+
   test('loads the next ordered image URL when the primary source fails', async ({ page }) => {
     await page.route('**/fallback-primary.webp', route => route.fulfill({ status: 415 }));
     await page.route('**/fallback.jpeg', route => route.fulfill({
