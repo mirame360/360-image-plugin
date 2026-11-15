@@ -1,8 +1,18 @@
 import * as THREE from 'three';
 import { strToU8, zipSync } from 'fflate';
+import {
+  directionAtScreenPoint,
+  solveViewForAnchor,
+  type Direction,
+  type ScreenPoint,
+  type ScreenSize,
+} from './projection';
 
-const MAX_INERTIA_YAW_DEGREES_PER_MS = 0.18;
-const MAX_INERTIA_PITCH_DEGREES_PER_MS = 0.12;
+// Inertia keeps the released pointer moving across the screen, so these are
+// in CSS pixels per millisecond.
+const MAX_INERTIA_PIXELS_PER_MS = 1.6;
+const INERTIA_START_PIXELS_PER_MS = 0.4;
+const INERTIA_STOP_PIXELS_PER_MS = 0.04;
 const INERTIA_VELOCITY_SMOOTHING = 0.35;
 const INERTIA_RELEASE_TIMEOUT_MS = 90;
 const INERTIA_FRICTION_PER_FRAME = 0.88;
@@ -196,10 +206,9 @@ export class Image360Player {
   private initialView: Viewport;
   
   private isDragging = false;
-  private dragStartX = 0;
-  private dragStartY = 0;
-  private dragStartYaw = 0;
-  private dragStartPitch = 0;
+  // Panorama direction grabbed by the pointer. Dragging solves for the view
+  // that keeps it under the pointer instead of mapping pixels to degrees.
+  private dragAnchor: Direction | null = null;
   
   private activePointers = new Map<number, { clientX: number; clientY: number }>();
   private initialPinchDistance: number | null = null;
@@ -225,9 +234,11 @@ export class Image360Player {
 
   // Inertia and Event emitter variables
   private listeners: { [key in PlayerEvent]?: ((data: any) => void)[] } = {};
-  private velocityYaw = 0;
-  private velocityPitch = 0;
+  private velocityX = 0;
+  private velocityY = 0;
   private isInertialGliding = false;
+  // Where the released pointer would be now if it had kept moving.
+  private glidePointer: { clientX: number; clientY: number } | null = null;
   private lastPointerTime = 0;
   private lastPointerX = 0;
   private lastPointerY = 0;
@@ -792,24 +803,34 @@ export class Image360Player {
       this.updateHotspots();
     }
 
-    if (this.isInertialGliding) {
+    if (this.isInertialGliding && this.glidePointer) {
       const friction = Math.pow(INERTIA_FRICTION_PER_FRAME, dt / 16.6);
-      
-      this.yaw += this.velocityYaw * dt;
-      this.pitch += this.velocityPitch * dt;
-      this.pitch = this.clampPitch(this.pitch);
 
-      this.velocityYaw *= friction;
-      this.velocityPitch *= friction;
+      // Continue the drag: carry what is under the released pointer along
+      // a virtual pointer that keeps the finger's screen velocity. Adding a
+      // yaw rate instead would whip the panorama around near a pole, where
+      // a small finger movement can turn yaw by tens of degrees.
+      const from = this.glidePointer;
+      const to = { clientX: from.clientX + this.velocityX * dt, clientY: from.clientY + this.velocityY * dt };
+      const solved = solveViewForAnchor(
+        { yaw: this.yaw, pitch: this.pitch, hfov: this.hfov },
+        this.getPointerPosition(to),
+        this.getViewportSize(),
+        this.getDirectionAtPointer(from),
+        MAX_PITCH_DEGREES,
+      );
+      this.yaw = solved.yaw;
+      this.pitch = solved.pitch;
+      this.glidePointer = to;
+
+      this.velocityX *= friction;
+      this.velocityY *= friction;
 
       this.updateCameraRotation();
       this.updateHotspots();
 
-      const speed = Math.sqrt(this.velocityYaw * this.velocityYaw + this.velocityPitch * this.velocityPitch);
-      if (speed < 0.005) {
-        this.isInertialGliding = false;
-        this.velocityYaw = 0;
-        this.velocityPitch = 0;
+      if (Math.hypot(this.velocityX, this.velocityY) < INERTIA_STOP_PIXELS_PER_MS) {
+        this.stopGlide();
       }
     }
 
@@ -818,6 +839,42 @@ export class Image360Player {
 
   // --- Input Handlers ---
 
+  private getViewportSize(): ScreenSize {
+    return {
+      width: this.container.clientWidth || 800,
+      height: this.container.clientHeight || 600,
+    };
+  }
+
+  // Maps client coordinates into the units the camera projects with. Going
+  // through the canvas's rendered box keeps this right when the player is
+  // CSS-scaled or offset by the container's borders and padding.
+  private getPointerPosition(pointer: { clientX: number; clientY: number }): ScreenPoint {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const size = this.getViewportSize();
+    const scaleX = rect.width ? size.width / rect.width : 1;
+    const scaleY = rect.height ? size.height / rect.height : 1;
+    return {
+      x: (pointer.clientX - rect.left) * scaleX,
+      y: (pointer.clientY - rect.top) * scaleY,
+    };
+  }
+
+  private stopGlide(): void {
+    this.isInertialGliding = false;
+    this.glidePointer = null;
+    this.velocityX = 0;
+    this.velocityY = 0;
+  }
+
+  private getDirectionAtPointer(pointer: { clientX: number; clientY: number }): Direction {
+    return directionAtScreenPoint(
+      { yaw: this.yaw, pitch: this.pitch, hfov: this.hfov },
+      this.getPointerPosition(pointer),
+      this.getViewportSize(),
+    );
+  }
+
   private onPointerDown = (e: PointerEvent): void => {
     this.stopAutoRotate();
     const canvas = this.renderer.domElement;
@@ -825,19 +882,14 @@ export class Image360Player {
     
     this.activePointers.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
 
-    this.velocityYaw = 0;
-    this.velocityPitch = 0;
-    this.isInertialGliding = false;
+    this.stopGlide();
     this.lastPointerTime = Date.now();
     this.lastPointerX = e.clientX;
     this.lastPointerY = e.clientY;
 
     if (this.activePointers.size === 1) {
       this.isDragging = true;
-      this.dragStartX = e.clientX;
-      this.dragStartY = e.clientY;
-      this.dragStartYaw = this.yaw;
-      this.dragStartPitch = this.pitch;
+      this.dragAnchor = this.getDirectionAtPointer(e);
 
       this.clickStartX = e.clientX;
       this.clickStartY = e.clientY;
@@ -860,29 +912,35 @@ export class Image360Player {
     
     this.activePointers.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
 
-    if (this.isDragging && this.activePointers.size === 1) {
-      const deltaX = e.clientX - this.dragStartX;
-      const deltaY = e.clientY - this.dragStartY;
-      
-      const sensitivity = this.hfov / 600; // Adjust speed based on FOV
-      
-      const targetYaw = this.dragStartYaw - deltaX * sensitivity;
-      const targetPitch = this.clampPitch(this.dragStartPitch + deltaY * sensitivity);
-      
-      const sampledYawVelocity = this.applyElasticVelocityLimit(
-        (targetYaw - this.yaw) / dt,
-        MAX_INERTIA_YAW_DEGREES_PER_MS,
+    if (this.isDragging && this.activePointers.size === 1 && this.dragAnchor) {
+      const point = this.getPointerPosition(e);
+      const solved = solveViewForAnchor(
+        { yaw: this.yaw, pitch: this.pitch, hfov: this.hfov },
+        point,
+        this.getViewportSize(),
+        this.dragAnchor,
+        MAX_PITCH_DEGREES,
       );
-      const sampledPitchVelocity = this.applyElasticVelocityLimit(
-        (targetPitch - this.pitch) / dt,
-        MAX_INERTIA_PITCH_DEGREES_PER_MS,
-      );
-      this.velocityYaw += (sampledYawVelocity - this.velocityYaw) * INERTIA_VELOCITY_SMOOTHING;
-      this.velocityPitch += (sampledPitchVelocity - this.velocityPitch) * INERTIA_VELOCITY_SMOOTHING;
 
-      this.yaw = targetYaw;
-      this.pitch = targetPitch;
-      
+      // Track the pointer's screen velocity for the glide after release.
+      const rawVelocityX = (e.clientX - this.lastPointerX) / dt;
+      const rawVelocityY = (e.clientY - this.lastPointerY) / dt;
+      const rawSpeed = Math.hypot(rawVelocityX, rawVelocityY);
+      const speedScale = rawSpeed > 0
+        ? this.applyElasticVelocityLimit(rawSpeed, MAX_INERTIA_PIXELS_PER_MS) / rawSpeed
+        : 0;
+      this.velocityX += (rawVelocityX * speedScale - this.velocityX) * INERTIA_VELOCITY_SMOOTHING;
+      this.velocityY += (rawVelocityY * speedScale - this.velocityY) * INERTIA_VELOCITY_SMOOTHING;
+
+      this.yaw = solved.yaw;
+      this.pitch = solved.pitch;
+      // At the pitch limit the grabbed point cannot follow vertically. Grab
+      // whatever is under the pointer now, so reversing the drag responds
+      // immediately instead of first crossing a dead zone.
+      if (solved.limited) {
+        this.dragAnchor = this.getDirectionAtPointer(e);
+      }
+
       this.updateCameraRotation();
       this.updateHotspots();
     } else if (this.activePointers.size === 2 && this.initialPinchDistance !== null) {
@@ -917,12 +975,11 @@ export class Image360Player {
       if (this.isDragging && clickDuration < 250 && clickDist < 5) {
         const raycaster = new THREE.Raycaster();
         const mouse = new THREE.Vector2();
-        const width = this.container.clientWidth || 800;
-        const height = this.container.clientHeight || 600;
-        const rect = this.container.getBoundingClientRect();
+        const { width, height } = this.getViewportSize();
+        const position = this.getPointerPosition(e);
 
-        mouse.x = ((e.clientX - rect.left) / width) * 2 - 1;
-        mouse.y = -((e.clientY - rect.top) / height) * 2 + 1;
+        mouse.x = (position.x / width) * 2 - 1;
+        mouse.y = -(position.y / height) * 2 + 1;
 
         raycaster.setFromCamera(mouse, this.camera);
         const intersects = raycaster.intersectObject(this.mesh);
@@ -943,26 +1000,28 @@ export class Image360Player {
       }
 
       this.isDragging = false;
+      this.dragAnchor = null;
       this.initialPinchDistance = null;
 
       // Start inertia glide phase
       if (Date.now() - this.lastPointerTime > INERTIA_RELEASE_TIMEOUT_MS) {
-        this.velocityYaw = 0;
-        this.velocityPitch = 0;
+        this.velocityX = 0;
+        this.velocityY = 0;
       }
-      const speed = Math.sqrt(this.velocityYaw * this.velocityYaw + this.velocityPitch * this.velocityPitch);
-      if (speed > 0.05) {
+      if (Math.hypot(this.velocityX, this.velocityY) > INERTIA_START_PIXELS_PER_MS) {
         this.isInertialGliding = true;
+        this.glidePointer = { clientX: e.clientX, clientY: e.clientY };
       }
     } else if (this.activePointers.size === 1) {
       // Re-initialize dragging for the single remaining pointer
       const remainingPointerId = Array.from(this.activePointers.keys())[0];
       const pointer = this.activePointers.get(remainingPointerId)!;
       this.isDragging = true;
-      this.dragStartX = pointer.clientX;
-      this.dragStartY = pointer.clientY;
-      this.dragStartYaw = this.yaw;
-      this.dragStartPitch = this.pitch;
+      this.dragAnchor = this.getDirectionAtPointer(pointer);
+      // The next velocity sample must measure this finger, not the one
+      // that lifted.
+      this.lastPointerX = pointer.clientX;
+      this.lastPointerY = pointer.clientY;
     }
   };
 
