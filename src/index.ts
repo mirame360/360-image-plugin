@@ -6,6 +6,7 @@ const MAX_INERTIA_PITCH_DEGREES_PER_MS = 0.12;
 const INERTIA_VELOCITY_SMOOTHING = 0.35;
 const INERTIA_RELEASE_TIMEOUT_MS = 90;
 const INERTIA_FRICTION_PER_FRAME = 0.88;
+const MAX_PITCH_DEGREES = 85;
 
 export interface WebGL360ColorFilters {
   exposure?: number;
@@ -796,7 +797,7 @@ export class Image360Player {
       
       this.yaw += this.velocityYaw * dt;
       this.pitch += this.velocityPitch * dt;
-      this.pitch = Math.max(-85, Math.min(85, this.pitch));
+      this.pitch = this.clampPitch(this.pitch);
 
       this.velocityYaw *= friction;
       this.velocityPitch *= friction;
@@ -866,7 +867,7 @@ export class Image360Player {
       const sensitivity = this.hfov / 600; // Adjust speed based on FOV
       
       const targetYaw = this.dragStartYaw - deltaX * sensitivity;
-      const targetPitch = Math.max(-85, Math.min(85, this.dragStartPitch + deltaY * sensitivity));
+      const targetPitch = this.clampPitch(this.dragStartPitch + deltaY * sensitivity);
       
       const sampledYawVelocity = this.applyElasticVelocityLimit(
         (targetYaw - this.yaw) / dt,
@@ -1009,7 +1010,7 @@ export class Image360Player {
   // --- Public API ---
 
   private clampPitch(value: number): number {
-    return Math.max(-85, Math.min(85, value));
+    return Math.max(-MAX_PITCH_DEGREES, Math.min(MAX_PITCH_DEGREES, value));
   }
 
   private applyElasticVelocityLimit(value: number, limit: number): number {
