@@ -1076,25 +1076,46 @@ export class Image360Player {
     }
   };
 
+  // Zooms while keeping the panorama point under the cursor in place, the
+  // way map and photo viewers do, instead of zooming into the screen center.
+  private zoomAt(pointer: { clientX: number; clientY: number }, hfov: number): void {
+    // A glide would carry the view away from the point being zoomed on.
+    this.stopGlide();
+    const anchor = this.getDirectionAtPointer(pointer);
+    this.hfov = this.clampHfov(hfov);
+    const solved = solveViewForAnchor(
+      { yaw: this.yaw, pitch: this.pitch, hfov: this.hfov },
+      this.getPointerPosition(pointer),
+      this.getViewportSize(),
+      anchor,
+      MAX_PITCH_DEGREES,
+      // One zoom step can turn the camera further than a drag step does.
+      'jump',
+    );
+    this.yaw = solved.yaw;
+    this.pitch = solved.pitch;
+
+    // A gesture in progress grabbed its point at the old zoom level.
+    if (this.isDragging && this.activePointers.size === 1) {
+      this.dragAnchor = this.getDirectionAtPointer(Array.from(this.activePointers.values())[0]);
+    } else if (this.activePointers.size === 2 && this.initialPinchDistance !== null) {
+      this.startPinch();
+    }
+
+    this.updateCameraFov();
+    this.updateCameraRotation();
+    this.updateHotspots();
+  }
+
   private onWheel = (e: WheelEvent): void => {
     e.preventDefault();
     this.stopAutoRotate();
-    this.hfov += e.deltaY * 0.05;
-    this.hfov = Math.max(30, Math.min(120, this.hfov));
-    
-    this.updateCameraFov();
-    this.updateHotspots();
+    this.zoomAt(e, this.hfov + e.deltaY * 0.05);
   };
 
-  private onDoubleClick = (): void => {
+  private onDoubleClick = (e: MouseEvent): void => {
     this.stopAutoRotate();
-    if (this.hfov < 50) {
-      this.hfov = 90;
-    } else {
-      this.hfov = 40;
-    }
-    this.updateCameraFov();
-    this.updateHotspots();
+    this.zoomAt(e, this.hfov < 50 ? 90 : 40);
   };
 
   // --- Event Emitter ---

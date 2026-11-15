@@ -546,6 +546,52 @@ describe('Image360Player', () => {
     expect(player.getHfov()).toBeGreaterThan(30);
   });
 
+  it('zooms toward the cursor on wheel and double-click', () => {
+    const player = new Image360Player({ container, imageUrl: 'test.jpg', initialView: { yaw: -40, pitch: 15 } });
+    const canvas = container.querySelector('canvas')!;
+    const size = { width: 800, height: 600 };
+
+    const underWheel = directionAtScreenPoint(player.getView(), { x: 650, y: 200 }, size);
+    canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: -400, clientX: 650, clientY: 200 }));
+    expect(player.getHfov()).toBeCloseTo(70);
+    expect(angleBetween(directionAtScreenPoint(player.getView(), { x: 650, y: 200 }, size), underWheel)).toBeLessThan(1e-4);
+
+    const underClick = directionAtScreenPoint(player.getView(), { x: 120, y: 480 }, size);
+    canvas.dispatchEvent(new MouseEvent('dblclick', { clientX: 120, clientY: 480 }));
+    expect(player.getHfov()).toBe(40);
+    expect(angleBetween(directionAtScreenPoint(player.getView(), { x: 120, y: 480 }, size), underClick)).toBeLessThan(1e-4);
+  });
+
+  it('keeps the double-clicked point under the cursor near the screen edge', () => {
+    // Zooming in from 90 to 40 degrees here turns the camera further than
+    // any drag step, which the drag rule would refuse.
+    const player = new Image360Player({ container, imageUrl: 'test.jpg', initialView: { pitch: -55 } });
+    const canvas = container.querySelector('canvas')!;
+    const size = { width: 800, height: 600 };
+    const underClick = directionAtScreenPoint(player.getView(), { x: 790, y: 590 }, size);
+
+    canvas.dispatchEvent(new MouseEvent('dblclick', { clientX: 790, clientY: 590 }));
+
+    expect(player.getHfov()).toBe(40);
+    expect(angleBetween(directionAtScreenPoint(player.getView(), { x: 790, y: 590 }, size), underClick)).toBeLessThan(1e-4);
+  });
+
+  it('stops an inertia glide before zooming so the cursor point stays put', () => {
+    const player = new Image360Player({ container, imageUrl: 'test.jpg' });
+    const canvas = container.querySelector('canvas')!;
+    canvas.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, clientX: 100, clientY: 100 }));
+    canvas.dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, clientX: 150, clientY: 100 }));
+    canvas.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, clientX: 150, clientY: 100 }));
+    expect((player as any).isInertialGliding).toBe(true);
+
+    canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, clientX: 600, clientY: 200 }));
+
+    expect((player as any).isInertialGliding).toBe(false);
+    const view = player.getView();
+    (player as any).animate();
+    expect(player.getView()).toEqual(view);
+  });
+
   it('stops auto-rotation as soon as the user interacts', () => {
     const player = new Image360Player({ container, imageUrl: 'test.jpg' });
     const canvas = container.querySelector('canvas')!;
